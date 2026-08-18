@@ -54,7 +54,3 @@ flutter build appbundle --release
 SQLite-файл находится в private application documents directory Android/iOS. Из приложения данные не уходят на сервер Product Boards.
 
 > В текущем контейнере Flutter SDK не установлен, поэтому фактический `flutter pub get/analyze/test/build` здесь не запускался. Если архив развернут в окружении, где отсутствует `android/gradle/wrapper/gradle-wrapper.jar`, один раз запустите `scripts/bootstrap_gradle_wrapper.ps1` (Windows) или `scripts/bootstrap_gradle_wrapper.sh` (Linux/macOS); скрипт берёт стандартные wrapper-файлы из установленного Flutter SDK и не перезаписывает код приложения.
-
-## Облачная сборка без Flutter SDK
-
-Для сборки через GitHub Actions см. `README_GITHUB_ACTIONS.md`.

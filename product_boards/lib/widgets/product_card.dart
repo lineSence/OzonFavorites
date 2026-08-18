@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import '../models/product.dart';
 
@@ -20,8 +21,7 @@ class ProductCard extends StatelessWidget {
           if (product.imageUrl != null && product.imageUrl!.isNotEmpty)
             AspectRatio(
               aspectRatio: 1,
-              child: Image.network(product.imageUrl!, fit: BoxFit.cover,
-                errorBuilder: (_, __, ___) => const _PlaceholderImage()),
+              child: _productImage(product.imageUrl!, fit: BoxFit.cover),
             )
           else
             const AspectRatio(aspectRatio: 1, child: _PlaceholderImage()),
@@ -40,6 +40,12 @@ class ProductCard extends StatelessWidget {
       ),
     );
   }
+}
+
+Widget _productImage(String value, {BoxFit fit = BoxFit.cover}) {
+  final uri = Uri.tryParse(value);
+  if (uri?.scheme == 'file') return Image.file(File(uri!.toFilePath()), fit: fit, errorBuilder: (_, __, ___) => const _PlaceholderImage());
+  return Image.network(value, fit: fit, errorBuilder: (_, __, ___) => const _PlaceholderImage());
 }
 
 class _PlaceholderImage extends StatelessWidget {
@@ -73,11 +79,7 @@ class ProductListTile extends StatelessWidget {
           child: ClipRRect(
             borderRadius: BorderRadius.circular(10),
             child: product.imageUrl != null && product.imageUrl!.isNotEmpty
-                ? Image.network(
-                    product.imageUrl!,
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => const _PlaceholderImage(),
-                  )
+                ? _productImage(product.imageUrl!, fit: BoxFit.cover)
                 : const _PlaceholderImage(),
           ),
         ),

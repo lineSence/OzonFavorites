@@ -15,11 +15,13 @@ class ProductImporter {
   static final _client = http.Client();
 
   Future<ImportedProductData> fetch(Uri uri) async {
-    final response = await _client.get(uri, headers: {
-      'User-Agent': 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/124 Mobile Safari/537.36',
-      'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.7',
-      'Accept': 'text/html,application/xhtml+xml',
-    }).timeout(const Duration(seconds: 12));
+    final response = await _client.get(_canonicalizeOzon(uri), headers: {
+      'User-Agent': 'Mozilla/5.0 (Linux; Android 14; K) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36',
+      'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+      'Cache-Control': 'no-cache',
+      'Pragma': 'no-cache',
+    }).timeout(const Duration(seconds: 15));
     if (response.statusCode < 200 || response.statusCode >= 400) {
       throw Exception('HTTP ${response.statusCode}');
     }
@@ -28,9 +30,14 @@ class ProductImporter {
     String? meta(String property) => document.querySelector('meta[property="$property"]')?.attributes['content'] ??
         document.querySelector('meta[name="$property"]')?.attributes['content'];
 
-    String? title = meta('og:title') ?? document.querySelector('title')?.text.trim();
-    String? image = meta('og:image');
-    String? description = meta('og:description');
+    String? title = meta('og:title') ??
+        document.querySelector('meta[name="twitter:title"]')?.attributes['content'] ??
+        document.querySelector('[itemprop="name"]')?.attributes['content'] ??
+        document.querySelector('title')?.text.trim();
+    String? image = meta('og:image') ??
+        meta('twitter:image') ??
+        document.querySelector('[itemprop="image"]')?.attributes['content'];
+    String? description = meta('og:description') ?? meta('twitter:description');
     double? price;
     String? currency = meta('product:price:currency');
     final priceContent = meta('product:price:amount');
@@ -44,7 +51,7 @@ class ProductImporter {
           if (candidate is! Map) continue;
           final map = Map<String, dynamic>.from(candidate);
           final type = '${map['@type'] ?? ''}'.toLowerCase();
-          if (type.contains('product')) {
+          if (type.contains('product') || map.containsKey('name') || map.containsKey('image')) {
             title = _string(map['name']) ?? title;
             image ??= _firstImage(map['image']);
             description ??= _string(map['description']);
@@ -60,6 +67,19 @@ class ProductImporter {
       }
     }
 
+    // Ozon may inline product data without standard OG tags.
+    if (title == null || image == null) {
+      final raw = response.body;
+      if (title == null) {
+        final m = RegExp(r'\"name\"\s*:\s*\"([^\"]{3,500})\"').firstMatch(raw);
+        title = _jsonUnescape(m?.group(1));
+      }
+      if (image == null) {
+        final m = RegExp(r'\"(?:image|images)\"\s*:\s*(?:\[\s*)?\"([^\"]+\.(?:jpg|jpeg|png|webp)[^\"]*)', caseSensitive: false).firstMatch(raw);
+        image = m?.group(1);
+      }
+    }
+
     return ImportedProductData(
       title: _clean(title),
       imageUrl: _absoluteImage(uri, image),
@@ -67,6 +87,18 @@ class ProductImporter {
       currency: currency,
       description: _clean(description),
     );
+  }
+
+  static Uri _canonicalizeOzon(Uri uri) {
+    if (!uri.host.toLowerCase().contains('ozon')) return uri;
+    final match = RegExp(r'(?<!\d)(\d{7,})(?!\d)').firstMatch(uri.path);
+    if (match == null) return uri;
+    return Uri.parse('https://www.ozon.ru/product/${match.group(1)}/');
+  }
+
+  static String? _jsonUnescape(String? value) {
+    if (value == null) return null;
+    try { return jsonDecode('"${value.replaceAll('"', '\"')}"') as String; } catch (_) { return value; }
   }
 
   static String? _string(dynamic value) => value?.toString().trim().isEmpty == true ? null : value?.toString().trim();

@@ -2,6 +2,9 @@ package com.example.productboards
 
 import android.content.Intent
 import android.os.Bundle
+import android.net.Uri
+import java.io.File
+import java.io.FileOutputStream
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -9,16 +12,16 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity : FlutterActivity() {
     private val channelName = "product_boards/share"
     private var channel: MethodChannel? = null
-    private var pendingSharedUrl: String? = null
+    private var pendingSharedData: Map<String, String?>? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName)
         channel?.setMethodCallHandler { call, result ->
             when (call.method) {
-                "getInitialSharedUrl" -> {
-                    result.success(pendingSharedUrl)
-                    pendingSharedUrl = null
+                "getInitialSharedData" -> {
+                    result.success(pendingSharedData)
+                    pendingSharedData = null
                 }
                 else -> result.notImplemented()
             }
@@ -34,10 +37,36 @@ class MainActivity : FlutterActivity() {
 
     private fun handleIncomingIntent(intent: Intent?, notifyDart: Boolean) {
         if (intent?.action != Intent.ACTION_SEND) return
-        val text = intent.getStringExtra(Intent.EXTRA_TEXT)?.trim() ?: return
+        val text = intent.getStringExtra(Intent.EXTRA_TEXT)?.trim().orEmpty()
         val url = extractUrl(text) ?: return
-        pendingSharedUrl = url
-        if (notifyDart) channel?.invokeMethod("sharedUrl", url)
+        val title = intent.getStringExtra(Intent.EXTRA_TITLE)?.trim()?.takeIf { it.isNotEmpty() }
+            ?: extractTitle(text, url)
+        val imagePath = copySharedImage(intent)
+        pendingSharedData = mapOf("url" to url, "title" to title, "imagePath" to imagePath)
+        if (notifyDart) channel?.invokeMethod("sharedData", pendingSharedData)
+    }
+
+    private fun extractTitle(text: String, url: String): String? {
+        val before = text.substringBefore(url).trim().trim('-', '—', ':', ' ', '\n')
+        return before.takeIf { it.length >= 3 && !it.equals("Поделиться", ignoreCase = true) }
+    }
+
+    private fun copySharedImage(intent: Intent): String? {
+        val uri = intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM) ?: return null
+        return try {
+            val mime = contentResolver.getType(uri) ?: "image/jpeg"
+            val ext = when {
+                mime.contains("png") -> "png"
+                mime.contains("webp") -> "webp"
+                mime.contains("gif") -> "gif"
+                else -> "jpg"
+            }
+            val file = File(cacheDir, "shared_${System.currentTimeMillis()}.$ext")
+            contentResolver.openInputStream(uri)?.use { input ->
+                FileOutputStream(file).use { output -> input.copyTo(output) }
+            }
+            file.toURI().toString()
+        } catch (_: Exception) { null }
     }
 
     private fun extractUrl(text: String): String? {

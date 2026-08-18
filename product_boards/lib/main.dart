@@ -25,18 +25,20 @@ class ProductBoardsApp extends StatefulWidget {
 
 class _ProductBoardsAppState extends State<ProductBoardsApp> {
   static const shareChannel = MethodChannel('product_boards/share');
-  String? sharedUrl;
+  SharePayload? sharedPayload;
 
   @override
   void initState() {
     super.initState();
     shareChannel.setMethodCallHandler((call) async {
-      if (call.method == 'sharedUrl' && call.arguments is String) {
-        setState(() => sharedUrl = call.arguments as String);
+      if (call.method == 'sharedData' && call.arguments is Map) {
+        setState(() => sharedPayload = SharePayload.fromMap(Map<Object?, Object?>.from(call.arguments as Map)));
       }
     });
-    shareChannel.invokeMethod<String>('getInitialSharedUrl').then((value) {
-      if (value != null && value.isNotEmpty && mounted) setState(() => sharedUrl = value);
+    shareChannel.invokeMethod('getInitialSharedData').then((value) {
+      if (value is Map && mounted) {
+        setState(() => sharedPayload = SharePayload.fromMap(Map<Object?, Object?>.from(value)));
+      }
     });
   }
 
@@ -45,15 +47,28 @@ class _ProductBoardsAppState extends State<ProductBoardsApp> {
     debugShowCheckedModeBanner: false,
     title: 'Product Boards',
     theme: ThemeData(useMaterial3: true, colorScheme: ColorScheme.fromSeed(seedColor: Colors.black), scaffoldBackgroundColor: const Color(0xfff6f6f4)),
-    home: HomeScreen(repository: widget.repository, sharedUrl: sharedUrl, consumeSharedUrl: () => setState(() => sharedUrl = null)),
+    home: HomeScreen(repository: widget.repository, sharedPayload: sharedPayload, consumeSharedPayload: () => setState(() => sharedPayload = null)),
   );
 }
 
+class SharePayload {
+  const SharePayload({this.url, this.title, this.imagePath});
+  final String? url;
+  final String? title;
+  final String? imagePath;
+
+  factory SharePayload.fromMap(Map<Object?, Object?> map) => SharePayload(
+        url: map['url']?.toString(),
+        title: map['title']?.toString(),
+        imagePath: map['imagePath']?.toString(),
+      );
+}
+
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key, required this.repository, required this.consumeSharedUrl, this.sharedUrl});
+  const HomeScreen({super.key, required this.repository, required this.consumeSharedPayload, this.sharedPayload});
   final LocalRepository repository;
-  final VoidCallback consumeSharedUrl;
-  final String? sharedUrl;
+  final VoidCallback consumeSharedPayload;
+  final SharePayload? sharedPayload;
   @override State<HomeScreen> createState() => _HomeScreenState();
 }
 
@@ -82,7 +97,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void didUpdateWidget(covariant HomeScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.sharedUrl != null && widget.sharedUrl != oldWidget.sharedUrl) _consumeIncoming();
+    if (widget.sharedPayload != null && widget.sharedPayload != oldWidget.sharedPayload) _consumeIncoming();
   }
 
   Future<void> _load() async {
@@ -93,13 +108,14 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _consumeIncoming() async {
-    final url = widget.sharedUrl;
+    final payload = widget.sharedPayload;
+    final url = payload?.url;
     if (url == null || url.isEmpty || importing) return;
-    widget.consumeSharedUrl();
-    await _addUrl(url);
+    widget.consumeSharedPayload();
+    await _addUrl(url, sharedTitle: payload?.title, sharedImagePath: payload?.imagePath);
   }
 
-  Future<void> _addUrl(String raw) async {
+  Future<void> _addUrl(String raw, {String? sharedTitle, String? sharedImagePath}) async {
     final uri = Uri.tryParse(raw.trim());
     if (uri == null || !uri.hasScheme || !{'http', 'https'}.contains(uri.scheme)) {
       _snack('Нужна ссылка http/https');
@@ -113,7 +129,8 @@ class _HomeScreenState extends State<HomeScreen> {
     try { data = await importer.fetch(uri); } catch (_) {}
     final product = Product(
       id: widget.repository.newId(), url: uri.toString(), source: _source(uri),
-      title: data.title?.isNotEmpty == true ? data.title! : _fallbackTitle(uri), imageUrl: data.imageUrl,
+      title: data.title?.isNotEmpty == true ? data.title! : (sharedTitle?.trim().isNotEmpty == true ? _cleanSharedTitle(sharedTitle!) : _fallbackTitle(uri)),
+      imageUrl: data.imageUrl ?? sharedImagePath,
       price: data.price, currency: data.currency ?? '₽', createdAt: DateTime.now(),
     );
     await widget.repository.upsertProduct(product);
@@ -124,7 +141,19 @@ class _HomeScreenState extends State<HomeScreen> {
 
   String _normalize(String value) => (Uri.tryParse(value)?.replace(query: '', fragment: '').toString() ?? value).replaceAll(RegExp(r'/$'), '').toLowerCase();
   String _source(Uri u) { final h = u.host.toLowerCase(); if (h.contains('ozon')) return 'OZON'; if (h.contains('wildberries')) return 'Wildberries'; if (h.contains('amazon')) return 'Amazon'; if (h.contains('market.yandex')) return 'Яндекс Маркет'; return h.isEmpty ? 'Другое' : h; }
-  String _fallbackTitle(Uri u) => u.pathSegments.isEmpty ? 'Новый товар' : Uri.decodeComponent(u.pathSegments.last.replaceAll(RegExp(r'[-_]+'), ' '));
+  String _fallbackTitle(Uri u) {
+    final segments = u.pathSegments;
+    if (segments.length >= 2 && segments.first.toLowerCase() == 'product') {
+      return 'Товар OZON ${segments.last}';
+    }
+    return 'Новый товар';
+  }
+
+  String _cleanSharedTitle(String value) {
+    final normalized = value.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (normalized.toLowerCase() == 'share' || normalized.toLowerCase() == 'ozon') return 'Товар OZON';
+    return normalized;
+  }
 
   List<Product> get visible {
     Iterable<Product> out = products;
