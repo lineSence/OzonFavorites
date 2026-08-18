@@ -35,9 +35,15 @@ class ProductImporter {
   final bool _enableBrowserFallback;
 
   Future<ImportedProductData> fetch(Uri uri) async {
-    ImportedProductData data = await _fetchHttp(uri);
+    ImportedProductData data;
+    try {
+      data = await _fetchHttp(uri);
+    } catch (_) {
+      data = const ImportedProductData();
+    }
 
-    if (_enableBrowserFallback && _isOzon(uri) && (data.price == null || data.imageUrl == null || data.title == null)) {
+    if (_enableBrowserFallback && _needsBrowserFallback(uri) &&
+        (data.price == null || data.imageUrl == null || data.title == null)) {
       try {
         final result = await _browserChannel.invokeMethod<dynamic>('resolveProduct', {'url': uri.toString()});
         if (result is Map) {
@@ -48,10 +54,10 @@ class ProductImporter {
             currency: _nullableString(result['currency']),
             description: _nullableString(result['description']),
           );
-          data = browserData.merge(data);
+          data = data.merge(browserData);
         }
       } on MissingPluginException {
-        // Unit tests and unsupported platforms can continue with HTTP parsing.
+        // Browser fallback is Android-specific.
       } on PlatformException {
         // A browser failure must never prevent basic import from working.
       }
@@ -61,14 +67,13 @@ class ProductImporter {
   }
 
   Future<ImportedProductData> _fetchHttp(Uri uri) async {
-    final response = await _client.get(_canonicalizeOzon(uri), headers: {
+    final response = await _client.get(_canonicalizeMarketplace(uri), headers: {
       'User-Agent': 'Mozilla/5.0 (Linux; Android 14; K) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36',
       'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
       'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
       'Cache-Control': 'no-cache',
       'Pragma': 'no-cache',
     }).timeout(const Duration(seconds: 15));
-
     if (response.statusCode < 200 || response.statusCode >= 400) {
       throw Exception('HTTP ${response.statusCode}');
     }
@@ -167,7 +172,10 @@ class ProductImporter {
     );
   }
 
-  static bool _isOzon(Uri uri) => uri.host.toLowerCase().contains('ozon');
+  static bool _needsBrowserFallback(Uri uri) {
+    final host = uri.host.toLowerCase();
+    return host.contains('ozon') || host.contains('wildberries');
+  }
 
   static String? _nullableString(dynamic value) {
     if (value == null) return null;
@@ -203,8 +211,9 @@ class ProductImporter {
       .replaceAll('&apos;', "'")
       .replaceAll('&amp;', '&');
 
-  static Uri _canonicalizeOzon(Uri uri) {
-    if (!_isOzon(uri)) return uri;
+  static Uri _canonicalizeMarketplace(Uri uri) {
+    final host = uri.host.toLowerCase();
+    if (!host.contains('ozon')) return uri;
     final match = RegExp(r'(?<!\d)(\d{7,})(?!\d)').firstMatch(uri.path);
     if (match == null) return uri;
     return Uri.parse('https://www.ozon.ru/product/${match.group(1)}/');
