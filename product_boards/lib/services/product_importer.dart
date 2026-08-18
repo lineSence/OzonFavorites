@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/services.dart';
 import 'package:html/parser.dart' as html_parser;
 import 'package:http/http.dart' as http;
 
@@ -10,13 +11,55 @@ class ImportedProductData {
   final double? price;
   final String? currency;
   final String? description;
+
+  ImportedProductData merge(ImportedProductData other) => ImportedProductData(
+        title: title ?? other.title,
+        imageUrl: imageUrl ?? other.imageUrl,
+        price: price ?? other.price,
+        currency: currency ?? other.currency,
+        description: description ?? other.description,
+      );
 }
 
 class ProductImporter {
-  ProductImporter({http.Client? client}) : _client = client ?? http.Client();
+  ProductImporter({http.Client? client, MethodChannel? browserChannel})
+      : _client = client ?? http.Client(),
+        _browserChannel = browserChannel ?? const MethodChannel('product_boards/share');
+
   final http.Client _client;
+  final MethodChannel _browserChannel;
 
   Future<ImportedProductData> fetch(Uri uri) async {
+    ImportedProductData data = await _fetchHttp(uri);
+
+    // HTTP HTML parsing is intentionally only the first layer. On Android,
+    // Ozon can render price/gallery data after JavaScript execution, so ask
+    // the native WebView resolver for the fields that are still missing.
+    if (_isOzon(uri) && (data.price == null || data.imageUrl == null || data.title == null)) {
+      try {
+        final result = await _browserChannel.invokeMethod<dynamic>('resolveProduct', {'url': uri.toString()});
+        if (result is Map) {
+          final browserData = ImportedProductData(
+            title: _nullableString(result['title']),
+            imageUrl: _nullableString(result['imageUrl']),
+            price: _nullableDouble(result['price']),
+            currency: _nullableString(result['currency']),
+            description: _nullableString(result['description']),
+          );
+          data = browserData.merge(data);
+        }
+      } on MissingPluginException {
+        // WebView fallback is Android-specific. Unit tests/desktop continue
+        // with the HTTP parser and embedded-data fallbacks below.
+      } on PlatformException {
+        // A browser failure must never prevent the basic import from working.
+      }
+    }
+
+    return data;
+  }
+
+  Future<ImportedProductData> _fetchHttp(Uri uri) async {
     final response = await _client.get(_canonicalizeOzon(uri), headers: {
       'User-Agent': 'Mozilla/5.0 (Linux; Android 14; K) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36',
       'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
@@ -29,7 +72,6 @@ class ProductImporter {
     }
 
     final document = html_parser.parse(response.body);
-
     String? meta(String property) =>
         document.querySelector('meta[property="$property"]')?.attributes['content'] ??
         document.querySelector('meta[name="$property"]')?.attributes['content'];
@@ -41,7 +83,6 @@ class ProductImporter {
         document.querySelector('[data-widget="webProductHeading"]')?.text.trim() ??
         document.querySelector('h1')?.text.trim() ??
         document.querySelector('title')?.text.trim();
-
     String? image = meta('og:image') ?? meta('twitter:image') ?? document.querySelector('[itemprop="image"]')?.attributes['content'];
     String? description = meta('og:description') ?? meta('twitter:description');
     double? price = _parsePrice(meta('product:price:amount'));
@@ -88,36 +129,31 @@ class ProductImporter {
       }
     }
 
-    final raw = response.body;
-    // Ozon can serialize JSON inside HTML with escaped quotes. Try both the
-    // original document and a quote-normalized copy so the fallback remains
-    // useful when no state-* wrapper is present.
-    final inlineCandidates = <String>[raw, raw.replaceAll(r'\"', '"')];
-    if (title == null || image == null || price == null) {
-      for (final inline in inlineCandidates) {
-        if (title == null) {
-          final match = RegExp(r'"name"\s*:\s*"([^"\\]{3,500})"').firstMatch(inline);
-          title = _jsonUnescape(match?.group(1));
-        }
-        if (image == null) {
-          final match = RegExp(
-            r'"(?:image|images)"\s*:\s*(?:\[\s*)?"(https?[^"\\]+\.(?:jpg|jpeg|png|webp)(?:\?[^"\\]*)?)',
-            caseSensitive: false,
-          ).firstMatch(inline);
-          image = match?.group(1);
-        }
-        if (price == null) {
-          final match = RegExp(
-            r'"(?:price|currentPrice|salePrice)"\s*:\s*"?([0-9][0-9\s.,\u00A0\u202F]*)',
-            caseSensitive: false,
-          ).firstMatch(inline);
-          if (match != null) {
-            price = _parsePrice(match.group(1));
-            currency ??= 'RUB';
-          }
-        }
-        if (title != null && image != null && price != null) break;
+    final normalizedRaw = response.body.replaceAll(RegExp(r'\\+"'), '"');
+    final inlineCandidates = <String>[response.body, normalizedRaw];
+    for (final inline in inlineCandidates) {
+      if (title == null) {
+        final match = RegExp(r'"name"\s*:\s*"([^"\\]{3,500})"').firstMatch(inline);
+        title = _jsonUnescape(match?.group(1));
       }
+      if (image == null) {
+        final match = RegExp(
+          r'"(?:image|images)"\s*:\s*(?:\[\s*)?"(https?[^"\\]+\.(?:jpg|jpeg|png|webp)(?:\?[^"\\]*)?)',
+          caseSensitive: false,
+        ).firstMatch(inline);
+        image = match?.group(1);
+      }
+      if (price == null) {
+        final match = RegExp(
+          r'"(?:price|currentPrice|salePrice)"\s*:\s*"?([0-9][0-9\s.,\u00A0\u202F]*)',
+          caseSensitive: false,
+        ).firstMatch(inline);
+        if (match != null) {
+          price = _parsePrice(match.group(1));
+          currency ??= 'RUB';
+        }
+      }
+      if (title != null && image != null && price != null) break;
     }
 
     return ImportedProductData(
@@ -127,6 +163,20 @@ class ProductImporter {
       currency: currency,
       description: _clean(description),
     );
+  }
+
+  static bool _isOzon(Uri uri) => uri.host.toLowerCase().contains('ozon');
+
+  static String? _nullableString(dynamic value) {
+    if (value == null) return null;
+    final text = value.toString().trim();
+    return text.isEmpty || text == 'null' ? null : text;
+  }
+
+  static double? _nullableDouble(dynamic value) {
+    if (value == null) return null;
+    if (value is num) return value.toDouble();
+    return double.tryParse(value.toString().replaceAll(',', '.'));
   }
 
   static Map<String, dynamic>? _decodeState(String? raw) {
@@ -152,7 +202,7 @@ class ProductImporter {
       .replaceAll('&amp;', '&');
 
   static Uri _canonicalizeOzon(Uri uri) {
-    if (!uri.host.toLowerCase().contains('ozon')) return uri;
+    if (!_isOzon(uri)) return uri;
     final match = RegExp(r'(?<!\d)(\d{7,})(?!\d)').firstMatch(uri.path);
     if (match == null) return uri;
     return Uri.parse('https://www.ozon.ru/product/${match.group(1)}/');
@@ -169,7 +219,6 @@ class ProductImporter {
   }
 
   static String? _string(dynamic value) => value?.toString().trim().isEmpty == true ? null : value?.toString().trim();
-
   static String? _clean(String? value) => value?.replaceAll(RegExp(r'\s+'), ' ').trim();
 
   static String? _firstImage(dynamic value) {
@@ -180,9 +229,7 @@ class ProductImporter {
         if (image != null) return image;
       }
     }
-    if (value is Map) {
-      return _string(value['src']) ?? _string(value['url']) ?? _string(value['image']);
-    }
+    if (value is Map) return _string(value['src']) ?? _string(value['url']) ?? _string(value['image']);
     return null;
   }
 
