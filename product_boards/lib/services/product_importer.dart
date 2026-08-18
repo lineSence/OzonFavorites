@@ -13,11 +13,11 @@ class ImportedProductData {
   final String? description;
 
   ImportedProductData merge(ImportedProductData other) => ImportedProductData(
-        title: title ?? other.title,
-        imageUrl: imageUrl ?? other.imageUrl,
-        price: price ?? other.price,
-        currency: currency ?? other.currency,
-        description: description ?? other.description,
+        title: other.title ?? title,
+        imageUrl: other.imageUrl ?? imageUrl,
+        price: other.price ?? price,
+        currency: other.currency ?? currency,
+        description: other.description ?? description,
       );
 }
 
@@ -56,7 +56,7 @@ class ProductImporter {
             description: _nullableString(result['description']),
           );
           data = data.merge(browserData);
-          if (data.title != null || data.imageUrl != null || data.price != null || data.description != null) {
+          if (browserData.title != null || browserData.imageUrl != null || browserData.price != null || browserData.description != null) {
             httpError = null;
           }
         }
@@ -103,7 +103,7 @@ class ProductImporter {
     for (final node in document.querySelectorAll('div[id^="state-webPrice-"]')) {
       final state = _decodeState(node.attributes['data-state']);
       if (state == null) continue;
-      final rawPrice = '${state['price'] ?? state['currentPrice'] ?? state['salePrice'] ?? ''}';
+      final rawPrice = '${state['price'] ?? state['currentPrice'] ?? state['salePrice'] ?? state['finalPrice'] ?? ''}';
       price ??= _parsePrice(rawPrice);
       currency ??= _currencyFromPrice(rawPrice);
       if (price != null) break;
@@ -132,8 +132,16 @@ class ProductImporter {
             description ??= _string(map['description']);
             final offers = map['offers'];
             if (offers is Map) {
-              price ??= _parsePrice('${offers['price'] ?? ''}');
+              price ??= _parsePrice('${offers['price'] ?? offers['lowPrice'] ?? offers['highPrice'] ?? ''}');
               currency ??= _string(offers['priceCurrency']);
+            } else if (offers is List) {
+              for (final offer in offers) {
+                if (offer is Map) {
+                  price ??= _parsePrice('${offer['price'] ?? offer['lowPrice'] ?? offer['highPrice'] ?? ''}');
+                  currency ??= _string(offer['priceCurrency']);
+                  if (price != null) break;
+                }
+              }
             }
           }
         }
@@ -142,8 +150,6 @@ class ProductImporter {
       }
     }
 
-    // Avito and other marketplaces can put a generic site image into OG tags.
-    // Search regular image attributes before falling back to that generic image.
     if (image == null || _isGenericImage(image, uri)) {
       final selectors = <String>[
         '[itemprop="image"]',
@@ -187,7 +193,7 @@ class ProductImporter {
       }
       if (price == null) {
         final match = RegExp(
-          r'"(?:price|currentPrice|salePrice)"\s*:\s*"?([0-9][0-9\s.,\u00A0\u202F]*)',
+          r'"(?:price|currentPrice|salePrice|finalPrice)"\s*:\s*"?([0-9][0-9\s.,\u00A0\u202F]*)',
           caseSensitive: false,
         ).firstMatch(inline);
         if (match != null) {
@@ -209,7 +215,7 @@ class ProductImporter {
 
   static bool _needsBrowserFallback(Uri uri) {
     final host = uri.host.toLowerCase();
-    return host.contains('ozon') || host.contains('wildberries');
+    return host.contains('ozon') || host.contains('wildberries') || host.contains('avito');
   }
 
   static String? _nullableString(dynamic value) {
