@@ -3,8 +3,8 @@
     <application
         android:label="Pinzon"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher"
-        android:roundIcon="@mipmap/ic_launcher"
+        android:icon="@drawable/pinzon_icon"
+        android:roundIcon="@drawable/pinzon_icon"
         android:allowBackup="true"
         android:supportsRtl="true">
         <activity
