@@ -100,12 +100,12 @@ jobs:
             -keysize 2048 \
             -validity 10000 \
             -dname "CN=Product Boards, OU=Build, O=Product Boards, L=Amsterdam, ST=NH, C=NL"
-          cat > key.properties <<EOF
-storePassword=github-actions
-keyPassword=github-actions
-keyAlias=productboards
-storeFile=release-keystore.jks
-EOF
+          printf '%s\n' \
+            'storePassword=github-actions' \
+            'keyPassword=github-actions' \
+            'keyAlias=productboards' \
+            'storeFile=release-keystore.jks' \
+            > key.properties
           ls -lh release-keystore.jks key.properties
 
       - name: Build release APK
