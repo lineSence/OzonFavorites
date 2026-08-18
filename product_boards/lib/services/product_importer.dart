@@ -70,15 +70,15 @@ class ProductImporter {
 
     // Ozon may inline product data without standard OG tags.
     if (title == null || image == null) {
-      final raw = response.body;
+      // Some Ozon responses wrap inline JSON inside escaped quotes (\\");
+      // normalize those quotes before applying the fallback patterns.
+      final raw = response.body.replaceAll(r'\"', '"');
       if (title == null) {
-        final m = RegExp(r'\"name\"\s*:\s*\"([^\"]{3,500})\"').firstMatch(raw);
+        final m = RegExp(r'"name"\s*:\s*"([^"\\]{3,500})"').firstMatch(raw);
         title = _jsonUnescape(m?.group(1));
       }
       if (image == null) {
-        // Хвост без \\ и ", чтобы не захватывать экранирующий backslash
-        // перед закрывающей \" в JSON-инлайне Ozon.
-        final m = RegExp(r'\"(?:image|images)\"\s*:\s*(?:\[\s*)?\"([^\"]+\.(?:jpg|jpeg|png|webp)[^\"\\]*)', caseSensitive: false).firstMatch(raw);
+        final m = RegExp(r'"(?:image|images)"\s*:\s*(?:\[\s*)?"([^"\\]+\.(?:jpg|jpeg|png|webp)[^"\\]*)', caseSensitive: false).firstMatch(raw);
         image = m?.group(1);
       }
     }
