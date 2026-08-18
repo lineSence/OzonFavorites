@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'models/board.dart';
 import 'models/product.dart';
 import 'models/tag.dart';
@@ -236,6 +237,42 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() { if (i >= 0) products[i] = result; });
   }
 
+  Future<void> _showProductMenu(Product product) async {
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          ListTile(title: Text(product.title, maxLines: 2, overflow: TextOverflow.ellipsis)),
+          ListTile(leading: const Icon(Icons.edit_outlined), title: const Text('Изменить'), onTap: () => Navigator.pop(sheetContext, 'edit')),
+          ListTile(leading: const Icon(Icons.open_in_new), title: const Text('Открыть на сайте'), onTap: () => Navigator.pop(sheetContext, 'open')),
+          ListTile(leading: const Icon(Icons.delete_outline), title: const Text('Удалить'), onTap: () => Navigator.pop(sheetContext, 'delete')),
+          const SizedBox(height: 8),
+        ]),
+      ),
+    );
+    if (!mounted || action == null) return;
+    switch (action) {
+      case 'edit':
+        await _editProduct(product);
+      case 'open':
+        final uri = Uri.tryParse(product.url);
+        if (uri != null) await launchUrl(uri, mode: LaunchMode.externalApplication);
+      case 'delete':
+        final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
+          title: const Text('Удалить товар?'),
+          content: Text(product.title),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Отмена')),
+            FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Удалить')),
+          ],
+        ));
+        if (ok != true) return;
+        await widget.repository.deleteProduct(product.id);
+        if (mounted) setState(() => products.removeWhere((x) => x.id == product.id));
+    }
+  }
+
   Future<void> _createBoard() async {
     final c = TextEditingController();
     final name = await showDialog<String>(context: context, builder: (_) => AlertDialog(title: const Text('Новая доска'), content: TextField(controller: c, autofocus: true, decoration: const InputDecoration(hintText: 'Например, Мастерская')), actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Отмена')), FilledButton(onPressed: () => Navigator.pop(context, c.text.trim()), child: const Text('Создать'))]));
@@ -325,7 +362,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ], icon: const Icon(Icons.sort)),
         ])),
         Expanded(
-          child: items.isEmpty ? const Center(child: Padding(padding: EdgeInsets.symmetric(horizontal: 24), child: Text('Добавьте товар через кнопку + или поделитесь ссылкой из магазина.', textAlign: TextAlign.center))) : layout == LayoutMode.masonry ? MasonryGridView.count(padding: const EdgeInsets.all(12), crossAxisCount: 2, mainAxisSpacing: 10, crossAxisSpacing: 10, itemCount: items.length, itemBuilder: (_, i) => ProductCard(product: items[i], onTap: () => _openProduct(items[i]), onLongPress: () => _editProduct(items[i]))) : ListView.separated(padding: const EdgeInsets.all(12), itemCount: items.length, separatorBuilder: (context, index) => const SizedBox(height: 8), itemBuilder: (_, i) => ProductListTile(product: items[i], onTap: () => _openProduct(items[i]), onLongPress: () => _editProduct(items[i]))),
+          child: items.isEmpty ? const Center(child: Padding(padding: EdgeInsets.symmetric(horizontal: 24), child: Text('Добавьте товар через кнопку + или поделитесь ссылкой из магазина.', textAlign: TextAlign.center))) : layout == LayoutMode.masonry ? MasonryGridView.count(padding: const EdgeInsets.all(12), crossAxisCount: 2, mainAxisSpacing: 10, crossAxisSpacing: 10, itemCount: items.length, itemBuilder: (_, i) => ProductCard(product: items[i], onTap: () => _openProduct(items[i]), onLongPress: () => _showProductMenu(items[i]))) : ListView.separated(padding: const EdgeInsets.all(12), itemCount: items.length, separatorBuilder: (context, index) => const SizedBox(height: 8), itemBuilder: (_, i) => ProductListTile(product: items[i], onTap: () => _openProduct(items[i]), onLongPress: () => _showProductMenu(items[i]))),
         ),
       ]),
       floatingActionButton: FloatingActionButton.extended(onPressed: () => _showAddDialog(), icon: const Icon(Icons.add), label: const Text('Добавить')),
