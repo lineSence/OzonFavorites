@@ -90,7 +90,7 @@ class ProductImporter {
         document.querySelector('[data-widget="webProductHeading"]')?.text.trim() ??
         document.querySelector('h1')?.text.trim() ??
         document.querySelector('title')?.text.trim();
-    String? image = meta('og:image') ?? meta('twitter:image') ?? document.querySelector('[itemprop="image"]')?.attributes['content'];
+    String? image = _usableImage(meta('og:image')) ?? _usableImage(meta('twitter:image'));
     String? description = meta('og:description') ?? meta('twitter:description');
     double? price = _parsePrice(meta('product:price:amount'));
     String? currency = meta('product:price:currency');
@@ -107,8 +107,8 @@ class ProductImporter {
     for (final node in document.querySelectorAll('div[id^="state-webGallery-"]')) {
       final state = _decodeState(node.attributes['data-state']);
       if (state == null) continue;
-      image ??= _firstImage(state['images']);
-      image ??= _firstImage(state['items']);
+      final candidate = _firstUsableImage(state['images']) ?? _firstUsableImage(state['items']);
+      if (candidate != null) image = candidate;
       if (image != null) break;
     }
 
@@ -122,7 +122,8 @@ class ProductImporter {
           final type = '${map['@type'] ?? ''}'.toLowerCase();
           if (type.contains('product') || map.containsKey('name') || map.containsKey('image')) {
             title = _string(map['name']) ?? title;
-            image ??= _firstImage(map['image']);
+            final candidateImage = _firstUsableImage(map['image']);
+            if (candidateImage != null) image = candidateImage;
             description ??= _string(map['description']);
             final offers = map['offers'];
             if (offers is Map) {
@@ -136,6 +137,29 @@ class ProductImporter {
       }
     }
 
+    // Avito and other marketplaces can put a generic site image into OG tags.
+    // Search regular image attributes before falling back to that generic image.
+    if (image == null || _isGenericImage(image, uri)) {
+      final selectors = <String>[
+        '[itemprop="image"]',
+        '[class*="gallery"] img',
+        '[class*="photo"] img',
+        '[class*="image"] img',
+        'picture img',
+        'img',
+      ];
+      for (final selector in selectors) {
+        for (final element in document.querySelectorAll(selector)) {
+          final candidate = _imageFromElement(element);
+          if (candidate != null && !_isGenericImage(candidate, uri)) {
+            image = candidate;
+            break;
+          }
+        }
+        if (image != null && !_isGenericImage(image, uri)) break;
+      }
+    }
+
     final normalizedRaw = response.body.replaceAll(RegExp(r'\\+"'), '"');
     final inlineCandidates = <String>[response.body, normalizedRaw];
     for (final inline in inlineCandidates) {
@@ -143,12 +167,18 @@ class ProductImporter {
         final match = RegExp(r'"name"\s*:\s*"([^"\\]{3,500})"').firstMatch(inline);
         title = _jsonUnescape(match?.group(1));
       }
-      if (image == null) {
-        final match = RegExp(
-          r'"(?:image|images)"\s*:\s*(?:\[\s*)?"(https?[^"\\]+\.(?:jpg|jpeg|png|webp)(?:\?[^"\\]*)?)',
+      if (image == null || _isGenericImage(image, uri)) {
+        final matches = RegExp(
+          r'"(?:image|images)"\s*:\s*(?:\[\s*)?"(https?[^"\\]+(?:\.(?:jpg|jpeg|png|webp)|(?:\?|$))[^"\\]*)',
           caseSensitive: false,
-        ).firstMatch(inline);
-        image = match?.group(1);
+        ).allMatches(inline);
+        for (final match in matches) {
+          final candidate = _usableImage(match.group(1));
+          if (candidate != null && !_isGenericImage(candidate, uri)) {
+            image = candidate;
+            break;
+          }
+        }
       }
       if (price == null) {
         final match = RegExp(
@@ -232,16 +262,42 @@ class ProductImporter {
   static String? _string(dynamic value) => value?.toString().trim().isEmpty == true ? null : value?.toString().trim();
   static String? _clean(String? value) => value?.replaceAll(RegExp(r'\s+'), ' ').trim();
 
-  static String? _firstImage(dynamic value) {
-    if (value is String && value.isNotEmpty) return value;
+  static String? _usableImage(String? value) =>
+      value == null || value.trim().isEmpty ? null : value.trim();
+
+  static String? _firstUsableImage(dynamic value) {
+    if (value is String && value.isNotEmpty) return _usableImage(value);
     if (value is List) {
       for (final item in value) {
-        final image = _firstImage(item);
+        final image = _firstUsableImage(item);
         if (image != null) return image;
       }
     }
-    if (value is Map) return _string(value['src']) ?? _string(value['url']) ?? _string(value['image']);
+    if (value is Map) {
+      return _usableImage(_string(value['src']) ?? _string(value['url']) ?? _string(value['image']));
+    }
     return null;
+  }
+
+  static String? _imageFromElement(dynamic element) {
+    if (element == null) return null;
+    for (final key in ['src', 'data-src', 'data-original', 'data-lazy-src', 'content']) {
+      final value = element.attributes[key];
+      final candidate = _usableImage(value);
+      if (candidate != null) return candidate;
+    }
+    return null;
+  }
+
+  static bool _isGenericImage(String? value, Uri pageUri) {
+    if (value == null || value.isEmpty) return true;
+    final lower = value.toLowerCase();
+    if (lower.contains('logo') || lower.contains('favicon') || lower.contains('sprite') || lower.contains('avatar') || lower.contains('placeholder')) return true;
+    if (pageUri.host.toLowerCase().contains('avito')) {
+      if (lower.contains('avito.ru') && (lower.contains('/logo') || lower.contains('logo.') || lower.contains('brand'))) return true;
+      if (lower.contains('avito.st') && (lower.contains('/logo') || lower.contains('logo.'))) return true;
+    }
+    return false;
   }
 
   static String? _absoluteImage(Uri base, String? value) {
