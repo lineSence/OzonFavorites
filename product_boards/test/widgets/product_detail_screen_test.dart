@@ -27,6 +27,8 @@ void main() {
     await tester.pumpWidget(MaterialApp(home: ProductDetailScreen(product: product, tags: tags)));
     expect(find.text('Умные часы'), findsOneWidget);
     expect(find.text('8900 ₽'), findsOneWidget);
+
+    await tester.scrollUntilVisible(find.text('Сравнить с другим'), 300, scrollable: find.byType(Scrollable).first);
     expect(find.text('Сравнить с другим'), findsOneWidget);
     expect(find.text('#часы'), findsOneWidget);
     expect(find.text('#подарок'), findsOneWidget);
