@@ -50,3 +50,52 @@ class _PlaceholderImage extends StatelessWidget {
         child: const Center(child: Icon(Icons.image_outlined, size: 42, color: Colors.black26)),
       );
 }
+
+class ProductListTile extends StatelessWidget {
+  final Product product;
+  final VoidCallback onTap;
+  final VoidCallback onLongPress;
+
+  const ProductListTile({super.key, required this.product, required this.onTap, required this.onLongPress});
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      margin: EdgeInsets.zero,
+      clipBehavior: Clip.antiAlias,
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        onTap: onTap,
+        onLongPress: onLongPress,
+        leading: SizedBox(
+          width: 72,
+          height: 72,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(10),
+            child: product.imageUrl != null && product.imageUrl!.isNotEmpty
+                ? Image.network(
+                    product.imageUrl!,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => const _PlaceholderImage(),
+                  )
+                : const _PlaceholderImage(),
+          ),
+        ),
+        title: Text(product.title, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w700)),
+        subtitle: Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (product.price != null)
+                Text('${product.price!.toStringAsFixed(0)} ₽', style: const TextStyle(fontWeight: FontWeight.w700)),
+              Text(product.source, style: const TextStyle(color: Colors.black54)),
+            ],
+          ),
+        ),
+        isThreeLine: true,
+      ),
+    );
+  }
+}
+
