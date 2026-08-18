@@ -30,11 +30,15 @@ class ProductImporter {
   final MethodChannel _browserChannel;
 
   Future<ImportedProductData> fetch(Uri uri) async {
-    ImportedProductData data = await _fetchHttp(uri);
+    ImportedProductData data = const ImportedProductData();
+    try {
+      data = await _fetchHttp(uri);
+    } catch (_) {
+      // Ozon can deliberately reject direct HTTP requests (403/429). The
+      // Android WebView layer below is the next resolver in that situation.
+      if (!_isOzon(uri)) rethrow;
+    }
 
-    // HTTP HTML parsing is intentionally only the first layer. On Android,
-    // Ozon can render price/gallery data after JavaScript execution, so ask
-    // the native WebView resolver for the fields that are still missing.
     if (_isOzon(uri) && (data.price == null || data.imageUrl == null || data.title == null)) {
       try {
         final result = await _browserChannel.invokeMethod<dynamic>('resolveProduct', {'url': uri.toString()});
