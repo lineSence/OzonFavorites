@@ -85,6 +85,29 @@ jobs:
           echo "Generated Gradle Wrapper:"
           ls -lh gradle/wrapper/gradle-wrapper.jar
 
+
+      - name: Create temporary release keystore
+        working-directory: ${{ steps.project.outputs.project_dir }}/android
+        shell: bash
+        run: |
+          set -euo pipefail
+          keytool -genkeypair -v \
+            -keystore release-keystore.jks \
+            -storepass github-actions \
+            -keypass github-actions \
+            -alias productboards \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=Product Boards, OU=Build, O=Product Boards, L=Amsterdam, ST=NH, C=NL"
+          cat > key.properties <<EOF
+storePassword=github-actions
+keyPassword=github-actions
+keyAlias=productboards
+storeFile=release-keystore.jks
+EOF
+          ls -lh release-keystore.jks key.properties
+
       - name: Build release APK
         working-directory: ${{ steps.project.outputs.project_dir }}
         run: flutter build apk --release
