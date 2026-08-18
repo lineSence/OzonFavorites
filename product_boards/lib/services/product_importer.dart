@@ -22,24 +22,22 @@ class ImportedProductData {
 }
 
 class ProductImporter {
-  ProductImporter({http.Client? client, MethodChannel? browserChannel})
-      : _client = client ?? http.Client(),
-        _browserChannel = browserChannel ?? const MethodChannel('product_boards/share');
+  ProductImporter({
+    http.Client? client,
+    MethodChannel? browserChannel,
+    bool enableBrowserFallback = true,
+  })  : _client = client ?? http.Client(),
+        _browserChannel = browserChannel ?? const MethodChannel('product_boards/share'),
+        _enableBrowserFallback = enableBrowserFallback;
 
   final http.Client _client;
   final MethodChannel _browserChannel;
+  final bool _enableBrowserFallback;
 
   Future<ImportedProductData> fetch(Uri uri) async {
-    ImportedProductData data = const ImportedProductData();
-    try {
-      data = await _fetchHttp(uri);
-    } catch (_) {
-      // Ozon can deliberately reject direct HTTP requests (403/429). The
-      // Android WebView layer below is the next resolver in that situation.
-      if (!_isOzon(uri)) rethrow;
-    }
+    ImportedProductData data = await _fetchHttp(uri);
 
-    if (_isOzon(uri) && (data.price == null || data.imageUrl == null || data.title == null)) {
+    if (_enableBrowserFallback && _isOzon(uri) && (data.price == null || data.imageUrl == null || data.title == null)) {
       try {
         final result = await _browserChannel.invokeMethod<dynamic>('resolveProduct', {'url': uri.toString()});
         if (result is Map) {
@@ -53,10 +51,9 @@ class ProductImporter {
           data = browserData.merge(data);
         }
       } on MissingPluginException {
-        // WebView fallback is Android-specific. Unit tests/desktop continue
-        // with the HTTP parser and embedded-data fallbacks below.
+        // Unit tests and unsupported platforms can continue with HTTP parsing.
       } on PlatformException {
-        // A browser failure must never prevent the basic import from working.
+        // A browser failure must never prevent basic import from working.
       }
     }
 
@@ -71,6 +68,7 @@ class ProductImporter {
       'Cache-Control': 'no-cache',
       'Pragma': 'no-cache',
     }).timeout(const Duration(seconds: 15));
+
     if (response.statusCode < 200 || response.statusCode >= 400) {
       throw Exception('HTTP ${response.statusCode}');
     }
