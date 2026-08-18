@@ -47,8 +47,6 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
     return current.tagIds.map((id) => byId[id]).whereType<Tag>().toList();
   }
 
-  String _formatDate(DateTime d) => '${d.day.toString().padLeft(2, '0')}.${d.month.toString().padLeft(2, '0')}.${d.year}';
-
   Future<void> _refreshPrice() async {
     final repo = widget.repository;
     if (repo == null || updatingPrice) return;
@@ -151,6 +149,4 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
           ],
         ),
       );
-
-  String _formatNullableDate(DateTime? date) => date == null ? '' : _formatDate(date);
 }
