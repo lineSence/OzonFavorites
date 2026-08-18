@@ -42,16 +42,12 @@ class ProductImporter {
         document.querySelector('h1')?.text.trim() ??
         document.querySelector('title')?.text.trim();
 
-    String? image = meta('og:image') ??
-        meta('twitter:image') ??
-        document.querySelector('[itemprop="image"]')?.attributes['content'];
-
+    String? image = meta('og:image') ?? meta('twitter:image') ?? document.querySelector('[itemprop="image"]')?.attributes['content'];
     String? description = meta('og:description') ?? meta('twitter:description');
     double? price = _parsePrice(meta('product:price:amount'));
     String? currency = meta('product:price:currency');
 
-    final priceStates = document.querySelectorAll('div[id^="state-webPrice-"]');
-    for (final node in priceStates) {
+    for (final node in document.querySelectorAll('div[id^="state-webPrice-"]')) {
       final state = _decodeState(node.attributes['data-state']);
       if (state == null) continue;
       final rawPrice = '${state['price'] ?? state['currentPrice'] ?? state['salePrice'] ?? ''}';
@@ -60,8 +56,7 @@ class ProductImporter {
       if (price != null) break;
     }
 
-    final galleryStates = document.querySelectorAll('div[id^="state-webGallery-"]');
-    for (final node in galleryStates) {
+    for (final node in document.querySelectorAll('div[id^="state-webGallery-"]')) {
       final state = _decodeState(node.attributes['data-state']);
       if (state == null) continue;
       image ??= _firstImage(state['images']);
@@ -94,27 +89,34 @@ class ProductImporter {
     }
 
     final raw = response.body;
+    // Ozon can serialize JSON inside HTML with escaped quotes. Try both the
+    // original document and a quote-normalized copy so the fallback remains
+    // useful when no state-* wrapper is present.
+    final inlineCandidates = <String>[raw, raw.replaceAll(r'\"', '"')];
     if (title == null || image == null || price == null) {
-      if (title == null) {
-        final match = RegExp(r'"name"\s*:\s*"([^"\\]{3,500})"').firstMatch(raw);
-        title = _jsonUnescape(match?.group(1));
-      }
-      if (image == null) {
-        final match = RegExp(
-          r'"(?:image|images)"\s*:\s*(?:\[\s*)?"(https?[^"\\]+\.(?:jpg|jpeg|png|webp)(?:\?[^"\\]*)?)',
-          caseSensitive: false,
-        ).firstMatch(raw);
-        image = match?.group(1);
-      }
-      if (price == null) {
-        final match = RegExp(
-          r'"(?:price|currentPrice|salePrice)"\s*:\s*"?([0-9][0-9\s.,\u00A0\u202F]*)',
-          caseSensitive: false,
-        ).firstMatch(raw);
-        if (match != null) {
-          price = _parsePrice(match.group(1));
-          currency ??= 'RUB';
+      for (final inline in inlineCandidates) {
+        if (title == null) {
+          final match = RegExp(r'"name"\s*:\s*"([^"\\]{3,500})"').firstMatch(inline);
+          title = _jsonUnescape(match?.group(1));
         }
+        if (image == null) {
+          final match = RegExp(
+            r'"(?:image|images)"\s*:\s*(?:\[\s*)?"(https?[^"\\]+\.(?:jpg|jpeg|png|webp)(?:\?[^"\\]*)?)',
+            caseSensitive: false,
+          ).firstMatch(inline);
+          image = match?.group(1);
+        }
+        if (price == null) {
+          final match = RegExp(
+            r'"(?:price|currentPrice|salePrice)"\s*:\s*"?([0-9][0-9\s.,\u00A0\u202F]*)',
+            caseSensitive: false,
+          ).firstMatch(inline);
+          if (match != null) {
+            price = _parsePrice(match.group(1));
+            currency ??= 'RUB';
+          }
+        }
+        if (title != null && image != null && price != null) break;
       }
     }
 
@@ -186,7 +188,7 @@ class ProductImporter {
 
   static String? _absoluteImage(Uri base, String? value) {
     if (value == null || value.isEmpty) return null;
-    final normalized = value.replaceAll('\\u002F', '/').replaceAll(r'\/', '/');
+    final normalized = value.replaceAll(r'\u002F', '/').replaceAll(r'\/', '/');
     final imageUri = Uri.tryParse(normalized);
     if (imageUri == null) return null;
     return imageUri.hasScheme ? imageUri.toString() : base.resolveUri(imageUri).toString();
@@ -194,11 +196,7 @@ class ProductImporter {
 
   static double? _parsePrice(String? value) {
     if (value == null) return null;
-    final normalized = value
-        .replaceAll('\u00A0', '')
-        .replaceAll('\u202F', '')
-        .replaceAll(' ', '')
-        .replaceAll(',', '.');
+    final normalized = value.replaceAll('\u00A0', '').replaceAll('\u202F', '').replaceAll(' ', '').replaceAll(',', '.');
     final match = RegExp(r'\d+(?:\.\d+)?').firstMatch(normalized);
     return match == null ? null : double.tryParse(match.group(0)!);
   }
