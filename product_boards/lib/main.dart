@@ -70,20 +70,8 @@ class _ProductBoardsAppState extends State<ProductBoardsApp> {
     });
   }
 
-  ThemeData _lightTheme() => ThemeData(
-    useMaterial3: true,
-    colorScheme: ColorScheme.fromSeed(seedColor: Colors.black, brightness: Brightness.light),
-    scaffoldBackgroundColor: const Color(0xfff6f6f4),
-    inputDecorationTheme: const InputDecorationTheme(filled: true),
-  );
-
-  ThemeData _darkTheme() => ThemeData(
-    useMaterial3: true,
-    colorScheme: ColorScheme.fromSeed(seedColor: Colors.white, brightness: Brightness.dark),
-    scaffoldBackgroundColor: const Color(0xff121212),
-    cardColor: const Color(0xff1d1d1d),
-    inputDecorationTheme: const InputDecorationTheme(filled: true),
-  );
+  ThemeData _lightTheme() => ThemeData(useMaterial3: true, colorScheme: ColorScheme.fromSeed(seedColor: Colors.black, brightness: Brightness.light), scaffoldBackgroundColor: const Color(0xfff6f6f4), inputDecorationTheme: const InputDecorationTheme(filled: true));
+  ThemeData _darkTheme() => ThemeData(useMaterial3: true, colorScheme: ColorScheme.fromSeed(seedColor: Colors.white, brightness: Brightness.dark), scaffoldBackgroundColor: const Color(0xff121212), cardColor: const Color(0xff1d1d1d), inputDecorationTheme: const InputDecorationTheme(filled: true));
 
   @override
   Widget build(BuildContext context) => MaterialApp(
@@ -92,13 +80,7 @@ class _ProductBoardsAppState extends State<ProductBoardsApp> {
     theme: _lightTheme(),
     darkTheme: _darkTheme(),
     themeMode: themeMode,
-    home: HomeScreen(
-      repository: widget.repository,
-      sharedPayload: sharedPayload,
-      themeMode: themeMode,
-      onThemeModeChanged: _setThemeMode,
-      consumeSharedPayload: () => setState(() => sharedPayload = null),
-    ),
+    home: HomeScreen(repository: widget.repository, sharedPayload: sharedPayload, themeMode: themeMode, onThemeModeChanged: _setThemeMode, consumeSharedPayload: () => setState(() => sharedPayload = null)),
   );
 }
 
@@ -107,12 +89,7 @@ class SharePayload {
   final String? url;
   final String? title;
   final String? imagePath;
-
-  factory SharePayload.fromMap(Map<Object?, Object?> map) => SharePayload(
-        url: map['url']?.toString(),
-        title: map['title']?.toString(),
-        imagePath: map['imagePath']?.toString(),
-      );
+  factory SharePayload.fromMap(Map<Object?, Object?> map) => SharePayload(url: map['url']?.toString(), title: map['title']?.toString(), imagePath: map['imagePath']?.toString());
 }
 
 class HomeScreen extends StatefulWidget {
@@ -143,7 +120,6 @@ class _HomeScreenState extends State<HomeScreen> {
   String? selectedSource;
   SortMode sort = SortMode.newest;
   LayoutMode layout = LayoutMode.masonry;
-
   late final Future<void> _loadFuture;
 
   @override
@@ -181,10 +157,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _addUrl(String raw, {String? sharedTitle, String? sharedImagePath}) async {
     final uri = Uri.tryParse(raw.trim());
-    if (uri == null || !uri.hasScheme || !{'http', 'https'}.contains(uri.scheme)) {
-      _snack('Нужна ссылка http/https');
-      return;
-    }
+    if (uri == null || !uri.hasScheme || !{'http', 'https'}.contains(uri.scheme)) { _snack('Нужна ссылка http/https'); return; }
     final normalized = _normalize(uri.toString());
     final duplicate = products.cast<Product?>().firstWhere((p) => p != null && _normalize(p.url) == normalized, orElse: () => null);
     if (duplicate != null) { await _openProduct(duplicate); return; }
@@ -194,8 +167,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final product = Product(
       id: widget.repository.newId(), url: uri.toString(), source: _source(uri),
       title: data.title?.isNotEmpty == true ? data.title! : (sharedTitle?.trim().isNotEmpty == true ? _cleanSharedTitle(sharedTitle!) : _fallbackTitle(uri)),
-      imageUrl: data.imageUrl ?? sharedImagePath,
-      price: data.price, currency: data.currency ?? '₽', createdAt: DateTime.now(),
+      imageUrl: data.imageUrl ?? sharedImagePath, price: data.price, currency: data.currency ?? '₽', createdAt: DateTime.now(),
     );
     await widget.repository.upsertProduct(product);
     if (!mounted) return;
@@ -213,30 +185,25 @@ class _HomeScreenState extends State<HomeScreen> {
     if (h.contains('avito')) return 'Avito';
     return h.isEmpty ? 'Другое' : h;
   }
-
   String _fallbackTitle(Uri u) {
     final segments = u.pathSegments;
     if (segments.length >= 2 && segments.first.toLowerCase() == 'product') return 'Товар OZON ${segments.last}';
     return 'Новый товар';
   }
-
   String _cleanSharedTitle(String value) {
     final normalized = value.replaceAll(RegExp(r'\s+'), ' ').trim();
     if (normalized.toLowerCase() == 'share' || normalized.toLowerCase() == 'ozon') return 'Товар OZON';
     return normalized;
   }
-
   String _tagNames(Product p) {
     final byId = {for (final t in tags) t.id: t};
     return p.tagIds.map((id) => byId[id]?.name ?? '').where((n) => n.isNotEmpty).join(' ');
   }
-
   List<String> get sources {
     final values = products.map((p) => p.source.trim()).where((s) => s.isNotEmpty).toSet().toList();
     values.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
     return values;
   }
-
   List<Product> get visible {
     Iterable<Product> out = products;
     if (selectedSource != null) out = out.where((p) => p.source == selectedSource);
@@ -256,9 +223,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _openProduct(Product product) async {
-    await Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => ProductDetailScreen(product: product, tags: tags, repository: widget.repository),
-    ));
+    await Navigator.of(context).push(MaterialPageRoute(builder: (_) => ProductDetailScreen(product: product, tags: tags, repository: widget.repository)));
     await _load();
   }
 
@@ -273,10 +238,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _createBoard() async {
     final c = TextEditingController();
-    final name = await showDialog<String>(context: context, builder: (_) => AlertDialog(
-      title: const Text('Новая доска'), content: TextField(controller: c, autofocus: true, decoration: const InputDecoration(hintText: 'Например, Мастерская')),
-      actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Отмена')), FilledButton(onPressed: () => Navigator.pop(context, c.text.trim()), child: const Text('Создать'))],
-    ));
+    final name = await showDialog<String>(context: context, builder: (_) => AlertDialog(title: const Text('Новая доска'), content: TextField(controller: c, autofocus: true, decoration: const InputDecoration(hintText: 'Например, Мастерская')), actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Отмена')), FilledButton(onPressed: () => Navigator.pop(context, c.text.trim()), child: const Text('Создать'))]));
     c.dispose();
     if (name == null || name.isEmpty) return;
     final board = Board(id: widget.repository.newId(), name: name, createdAt: DateTime.now(), sortOrder: boards.length);
@@ -284,35 +246,19 @@ class _HomeScreenState extends State<HomeScreen> {
     if (mounted) setState(() => boards.add(board));
   }
 
-  Future<void> _delete(Product p) async {
-    final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
-      title: const Text('Удалить товар?'), content: Text(p.title),
-      actions: [TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Отмена')), FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Удалить'))],
-    ));
-    if (ok != true) return;
-    await widget.repository.deleteProduct(p.id);
-    if (mounted) setState(() => products.removeWhere((x) => x.id == p.id));
-  }
-
   Future<void> _refreshPrices({bool showSummary = false}) async {
     if (refreshingPrices) return;
     await _loadFuture;
     if (!mounted) return;
     final active = products.where((p) => p.status == ProductStatus.wishlist || p.status == ProductStatus.considering).toList();
-    if (active.isEmpty) {
-      if (showSummary && mounted) _snack('Нет товаров для обновления цен');
-      return;
-    }
+    if (active.isEmpty) { if (showSummary && mounted) _snack('Нет товаров для обновления цен'); return; }
     setState(() => refreshingPrices = true);
     var updated = 0, failed = 0;
     const batch = 3;
     for (var i = 0; i < active.length; i += batch) {
       final chunk = active.skip(i).take(batch).toList();
       final results = await Future.wait(chunk.map((p) => priceTracker.updatePrice(p)));
-      for (final r in results) {
-        if (r.status == PriceUpdateStatus.updated) updated++;
-        if (r.status == PriceUpdateStatus.failed) failed++;
-      }
+      for (final r in results) { if (r.status == PriceUpdateStatus.updated) updated++; if (r.status == PriceUpdateStatus.failed) failed++; }
       if (!mounted) return;
     }
     if (!mounted) return;
@@ -321,24 +267,14 @@ class _HomeScreenState extends State<HomeScreen> {
     if (showSummary && mounted) _snack(updated == 0 && failed == 0 ? 'Цены не изменились' : 'Обновлено цен: $updated, ошибок: $failed');
   }
 
-  String _themeLabel() => switch (widget.themeMode) {
-    ThemeMode.system => 'Системная',
-    ThemeMode.light => 'Светлая',
-    ThemeMode.dark => 'Тёмная',
-  };
+  String _themeLabel() => switch (widget.themeMode) { ThemeMode.system => 'Системная', ThemeMode.light => 'Светлая', ThemeMode.dark => 'Тёмная' };
 
   Future<void> _chooseTheme() async {
-    final selected = await showDialog<ThemeMode>(
-      context: context,
-      builder: (_) => SimpleDialog(
-        title: const Text('Тема оформления'),
-        children: [
-          SimpleDialogOption(onPressed: () => Navigator.pop(context, ThemeMode.system), child: const ListTile(leading: Icon(Icons.brightness_auto_outlined), title: Text('Системная'), subtitle: Text('Следовать настройкам устройства'))),
-          SimpleDialogOption(onPressed: () => Navigator.pop(context, ThemeMode.light), child: const ListTile(leading: Icon(Icons.light_mode_outlined), title: Text('Светлая'))),
-          SimpleDialogOption(onPressed: () => Navigator.pop(context, ThemeMode.dark), child: const ListTile(leading: Icon(Icons.dark_mode_outlined), title: Text('Тёмная'))),
-        ],
-      ),
-    );
+    final selected = await showDialog<ThemeMode>(context: context, builder: (_) => SimpleDialog(title: const Text('Тема оформления'), children: [
+      SimpleDialogOption(onPressed: () => Navigator.pop(context, ThemeMode.system), child: const ListTile(leading: Icon(Icons.brightness_auto_outlined), title: Text('Системная'), subtitle: Text('Следовать настройкам устройства'))),
+      SimpleDialogOption(onPressed: () => Navigator.pop(context, ThemeMode.light), child: const ListTile(leading: Icon(Icons.light_mode_outlined), title: Text('Светлая'))),
+      SimpleDialogOption(onPressed: () => Navigator.pop(context, ThemeMode.dark), child: const ListTile(leading: Icon(Icons.dark_mode_outlined), title: Text('Тёмная'))),
+    ]));
     if (selected != null) await widget.onThemeModeChanged(selected);
   }
 
@@ -347,28 +283,8 @@ class _HomeScreenState extends State<HomeScreen> {
       const ListTile(title: Text('Настройки', style: TextStyle(fontWeight: FontWeight.w800))),
       ListTile(leading: const Icon(Icons.palette_outlined), title: const Text('Тема оформления'), trailing: Text(_themeLabel()), onTap: () async { Navigator.pop(context); await _chooseTheme(); }),
       ListTile(leading: const Icon(Icons.upload_outlined), title: const Text('Поделиться резервной копией'), onTap: () async { Navigator.pop(context); await backupService.shareJson(await widget.repository.exportData()); }),
-      ListTile(leading: const Icon(Icons.download_outlined), title: const Text('Восстановить из буфера обмена'), onTap: () async {
-        Navigator.pop(context);
-        final text = (await Clipboard.getData(Clipboard.kTextPlain))?.text;
-        if (text == null) return;
-        try {
-          await widget.repository.importData(backupService.decode(text));
-          await _load();
-          if (mounted) _snack('Готово');
-        } catch (_) {
-          if (mounted) _snack('Некорректная резервная копия');
-        }
-      }),
-      Padding(
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
-        child: Align(
-          alignment: Alignment.centerLeft,
-          child: Text(
-            'Только локальное хранение. Облачной синхронизации нет.',
-            style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
-          ),
-        ),
-      ),
+      ListTile(leading: const Icon(Icons.download_outlined), title: const Text('Восстановить из буфера обмена'), onTap: () async { Navigator.pop(context); final text = (await Clipboard.getData(Clipboard.kTextPlain))?.text; if (text == null) return; try { await widget.repository.importData(backupService.decode(text)); await _load(); if (mounted) _snack('Готово'); } catch (_) { if (mounted) _snack('Некорректная резервная копия'); } }),
+      Padding(padding: const EdgeInsets.fromLTRB(16, 0, 16, 20), child: Align(alignment: Alignment.centerLeft, child: Text('Только локальное хранение. Облачной синхронизации нет.', style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant)))),
     ])));
   }
 
@@ -389,13 +305,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ListTile(leading: const Icon(Icons.home_outlined), title: const Text('Все товары'), selected: selectedSource == null && selectedBoard == 0, onTap: () { Navigator.pop(context); setState(() { selectedSource = null; selectedBoard = 0; }); }),
         const Divider(),
         const Padding(padding: EdgeInsets.fromLTRB(12, 8, 12, 4), child: Text('Сайты', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: Colors.grey))),
-        ...sources.map((source) => ListTile(
-          leading: Icon(source == 'OZON' ? Icons.shopping_bag_outlined : source == 'Wildberries' ? Icons.storefront_outlined : source == 'Avito' ? Icons.local_offer_outlined : Icons.language_outlined),
-          title: Text(source),
-          trailing: Text('${products.where((p) => p.source == source).length}'),
-          selected: selectedSource == source,
-          onTap: () { Navigator.pop(context); setState(() { selectedSource = source; selectedBoard = 0; }); },
-        )),
+        ...sources.map((source) => ListTile(leading: Icon(source == 'OZON' ? Icons.shopping_bag_outlined : source == 'Wildberries' ? Icons.storefront_outlined : source == 'Avito' ? Icons.local_offer_outlined : Icons.language_outlined), title: Text(source), trailing: Text('${products.where((p) => p.source == source).length}'), selected: selectedSource == source, onTap: () { Navigator.pop(context); setState(() { selectedSource = source; selectedBoard = 0; }); })),
         if (sources.isNotEmpty) const Divider(),
         const Padding(padding: EdgeInsets.fromLTRB(12, 8, 12, 4), child: Text('Доски', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: Colors.grey))),
         ...boards.asMap().entries.map((e) => ListTile(leading: const Icon(Icons.dashboard_outlined), title: Text(e.value.name), selected: selectedSource == null && selectedBoard == e.key + 1, onTap: () { Navigator.pop(context); setState(() { selectedSource = null; selectedBoard = e.key + 1; }); })),
@@ -415,39 +325,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ], icon: const Icon(Icons.sort)),
         ])),
         Expanded(
-          child: items.isEmpty
-              ? const Center(
-                  child: Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 24),
-                    child: Text(
-                      'Добавьте товар через кнопку + или поделитесь ссылкой из магазина.',
-                      textAlign: TextAlign.center,
-                    ),
-                  ),
-                )
-              : layout == LayoutMode.masonry
-                  ? MasonryGridView.count(
-                      padding: const EdgeInsets.all(12),
-                      crossAxisCount: 2,
-                      mainAxisSpacing: 10,
-                      crossAxisSpacing: 10,
-                      itemCount: items.length,
-                      itemBuilder: (_, i) => ProductCard(
-                        product: items[i],
-                        onTap: () => _openProduct(items[i]),
-                        onLongPress: () => _editProduct(items[i]),
-                      ),
-                    )
-                  : ListView.separated(
-                      padding: const EdgeInsets.all(12),
-                      itemCount: items.length,
-                      separatorBuilder: (context, index) => const SizedBox(height: 8),
-                      itemBuilder: (_, i) => ProductListTile(
-                        product: items[i],
-                        onTap: () => _openProduct(items[i]),
-                        onLongPress: () => _editProduct(items[i]),
-                      ),
-                    ),
+          child: items.isEmpty ? const Center(child: Padding(padding: EdgeInsets.symmetric(horizontal: 24), child: Text('Добавьте товар через кнопку + или поделитесь ссылкой из магазина.', textAlign: TextAlign.center))) : layout == LayoutMode.masonry ? MasonryGridView.count(padding: const EdgeInsets.all(12), crossAxisCount: 2, mainAxisSpacing: 10, crossAxisSpacing: 10, itemCount: items.length, itemBuilder: (_, i) => ProductCard(product: items[i], onTap: () => _openProduct(items[i]), onLongPress: () => _editProduct(items[i]))) : ListView.separated(padding: const EdgeInsets.all(12), itemCount: items.length, separatorBuilder: (context, index) => const SizedBox(height: 8), itemBuilder: (_, i) => ProductListTile(product: items[i], onTap: () => _openProduct(items[i]), onLongPress: () => _editProduct(items[i]))),
         ),
       ]),
       floatingActionButton: FloatingActionButton.extended(onPressed: () => _showAddDialog(), icon: const Icon(Icons.add), label: const Text('Добавить')),
