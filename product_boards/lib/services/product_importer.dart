@@ -76,7 +76,7 @@ class ProductImporter {
         title = _jsonUnescape(m?.group(1));
       }
       if (image == null) {
-        // Хвост без \ и ", чтобы не захватывать экранирующий backslash
+        // Хвост без \\ и ", чтобы не захватывать экранирующий backslash
         // перед закрывающей \" в JSON-инлайне Ozon.
         final m = RegExp(r'\"(?:image|images)\"\s*:\s*(?:\[\s*)?\"([^\"]+\.(?:jpg|jpeg|png|webp)[^\"\\]*)', caseSensitive: false).firstMatch(raw);
         image = m?.group(1);
@@ -101,7 +101,11 @@ class ProductImporter {
 
   static String? _jsonUnescape(String? value) {
     if (value == null) return null;
-    try { return jsonDecode('"${value.replaceAll('"', '\"')}"') as String; } catch (_) { return value; }
+    try {
+      return jsonDecode('"${value.replaceAll('"', '\\"')}"') as String;
+    } catch (_) {
+      return value;
+    }
   }
 
   static String? _string(dynamic value) => value?.toString().trim().isEmpty == true ? null : value?.toString().trim();
