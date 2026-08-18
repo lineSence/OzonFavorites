@@ -1,14 +1,19 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:product_boards/services/product_importer.dart';
+
+http.Response utf8Response(String body, int statusCode) =>
+    http.Response.bytes(utf8.encode(body), statusCode, headers: {'content-type': 'text/html; charset=utf-8'});
 
 void main() {
   group('ProductImporter', () {
     test('extracts Open Graph metadata and canonicalizes Ozon URLs', () async {
       final client = MockClient((request) async {
         expect(request.url.toString(), 'https://www.ozon.ru/product/1234567/');
-        return http.Response('''
+        return utf8Response('''
           <html>
             <head>
               <meta property="og:title" content="Смартфон X" />
@@ -31,7 +36,7 @@ void main() {
 
     test('falls back to JSON-LD when OG tags are missing', () async {
       final client = MockClient((request) async {
-        return http.Response('''
+        return utf8Response('''
           <html>
             <head>
               <script type="application/ld+json">{"@context":"https://schema.org","@type":"Product","name":"Умные часы","image":"https://cdn.example.com/watch.jpg","offers":{"price":"8900.50","priceCurrency":"RUB"}}</script>
@@ -49,7 +54,7 @@ void main() {
 
     test('uses regex fallback for Ozon pages with inline state', () async {
       final client = MockClient((request) async {
-        return http.Response(
+        return utf8Response(
           '{\\"name\\":\\"Товар из OZON\\",\\"images\\":[\\"https://cdn.example.com/pic.webp\\"],\\"price\\":\\"4990\\"}',
           200,
         );
@@ -63,7 +68,7 @@ void main() {
     test('does not canonicalize non-Ozon URLs and uses <title>', () async {
       final client = MockClient((request) async {
         expect(request.url.toString(), 'https://example.com/product/abc');
-        return http.Response('<html><head><title>Example Store</title></head></html>', 200);
+        return utf8Response('<html><head><title>Example Store</title></head></html>', 200);
       });
       final importer = ProductImporter(client: client);
       final data = await importer.fetch(Uri.parse('https://example.com/product/abc'));
