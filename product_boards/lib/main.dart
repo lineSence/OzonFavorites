@@ -48,7 +48,7 @@ class _ProductBoardsAppState extends State<ProductBoardsApp> {
   @override
   Widget build(BuildContext context) => MaterialApp(
     debugShowCheckedModeBanner: false,
-    title: 'Product Boards',
+    title: 'Pinzon',
     theme: ThemeData(useMaterial3: true, colorScheme: ColorScheme.fromSeed(seedColor: Colors.black), scaffoldBackgroundColor: const Color(0xfff6f6f4)),
     home: HomeScreen(repository: widget.repository, sharedPayload: sharedPayload, consumeSharedPayload: () => setState(() => sharedPayload = null)),
   );
@@ -224,8 +224,6 @@ class _HomeScreenState extends State<HomeScreen> {
     if (mounted) setState(() => products.removeWhere((x) => x.id == p.id));
   }
 
-  /// Обновляет цены «активных» товаров (статусы Хочу/Думаю).
-  /// При старте — без сводки, по кнопке — со сводкой в снэкбаре.
   Future<void> _refreshPrices({bool showSummary = false}) async {
     if (refreshingPrices) return;
     await _loadFuture;
@@ -282,7 +280,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (!ready) return const Scaffold(body: Center(child: CircularProgressIndicator()));
     final items = visible;
     return Scaffold(
-      appBar: AppBar(title: const Text('Product Boards', style: TextStyle(fontWeight: FontWeight.w900)), actions: [
+      appBar: AppBar(title: const Text('Pinzon', style: TextStyle(fontWeight: FontWeight.w900)), actions: [
         IconButton(tooltip: 'Вид', onPressed: () => setState(() => layout = layout == LayoutMode.masonry ? LayoutMode.list : LayoutMode.masonry), icon: Icon(layout == LayoutMode.masonry ? Icons.view_list : Icons.grid_view)),
         IconButton(tooltip: refreshingPrices ? 'Обновление цен…' : 'Обновить цены', onPressed: refreshingPrices ? null : () => _refreshPrices(showSummary: true), icon: refreshingPrices ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.refresh)),
         IconButton(tooltip: 'Настройки', onPressed: _settings, icon: const Icon(Icons.settings_outlined)),
@@ -295,45 +293,28 @@ class _HomeScreenState extends State<HomeScreen> {
       ]))),
       body: Column(children: [
         Padding(padding: const EdgeInsets.fromLTRB(12, 8, 12, 4), child: Row(children: [
-          Expanded(child: TextField(onChanged: (v) => setState(() => query = v), decoration: InputDecoration(prefixIcon: const Icon(Icons.search), hintText: 'Поиск', filled: true, fillColor: Colors.white, border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none)))),
-          const SizedBox(width: 8), PopupMenuButton<SortMode>(onSelected: (v) => setState(() => sort = v), itemBuilder: (_) => const [PopupMenuItem(value: SortMode.newest, child: Text('Новые')), PopupMenuItem(value: SortMode.oldest, child: Text('Старые')), PopupMenuItem(value: SortMode.priceUp, child: Text('Цена ↑')), PopupMenuItem(value: SortMode.priceDown, child: Text('Цена ↓')), PopupMenuItem(value: SortMode.priority, child: Text('Приоритет')), PopupMenuItem(value: SortMode.name, child: Text('Название'))], child: const Padding(padding: EdgeInsets.all(12), child: Icon(Icons.tune))),
+          Expanded(child: TextField(decoration: const InputDecoration(prefixIcon: Icon(Icons.search), hintText: 'Поиск по товарам', filled: true, border: OutlineInputBorder(borderSide: BorderSide.none)), onChanged: (v) => setState(() => query = v))),
+          const SizedBox(width: 8),
+          PopupMenuButton<SortMode>(initialValue: sort, onSelected: (v) => setState(() => sort = v), itemBuilder: (_) => const [
+            PopupMenuItem(value: SortMode.newest, child: Text('Новые')),
+            PopupMenuItem(value: SortMode.oldest, child: Text('Старые')),
+            PopupMenuItem(value: SortMode.priceUp, child: Text('Цена ↑')),
+            PopupMenuItem(value: SortMode.priceDown, child: Text('Цена ↓')),
+            PopupMenuItem(value: SortMode.name, child: Text('По названию')),
+            PopupMenuItem(value: SortMode.priority, child: Text('Приоритет')),
+          ], icon: const Icon(Icons.sort)),
         ])),
-        if (importing) const LinearProgressIndicator(minHeight: 2),
-        Expanded(child: items.isEmpty ? _empty() : _content(items)),
+        Expanded(child: items.isEmpty ? const Center(child: Text('Добавьте товар через кнопку + или поделитесь ссылкой из магазина.')) : layout == LayoutMode.masonry ? MasonryGridView.count(padding: const EdgeInsets.all(12), crossAxisCount: 2, mainAxisSpacing: 10, crossAxisSpacing: 10, itemCount: items.length, itemBuilder: (_, i) => ProductCard(product: items[i], onTap: () => _editProduct(items[i]), onLongPress: () => _delete(items[i])) : ListView.separated(padding: const EdgeInsets.all(12), itemCount: items.length, separatorBuilder: (_, __) => const SizedBox(height: 8), itemBuilder: (_, i) => ProductListTile(product: items[i], onTap: () => _editProduct(items[i]), onLongPress: () => _delete(items[i])))),
       ]),
-      floatingActionButton: FloatingActionButton.extended(onPressed: _manualAdd, icon: const Icon(Icons.add), label: const Text('Добавить')),
+      floatingActionButton: FloatingActionButton.extended(onPressed: () => _showAddDialog(), icon: const Icon(Icons.add), label: const Text('Добавить')),
     );
   }
 
-  Widget _content(List<Product> items) {
-    if (layout == LayoutMode.list) return ListView.builder(padding: const EdgeInsets.fromLTRB(12, 8, 12, 100), itemCount: items.length, itemBuilder: (_, i) => Padding(padding: const EdgeInsets.only(bottom: 8), child: ProductListTile(product: items[i], onTap: () => _openDetail(items[i]), onLongPress: () => _menu(items[i]))));
-    final width = MediaQuery.sizeOf(context).width;
-    final cols = width >= 1200 ? 5 : width >= 900 ? 4 : width >= 600 ? 3 : 2;
-    return MasonryGridView.count(padding: const EdgeInsets.fromLTRB(12, 8, 12, 100), crossAxisCount: cols, mainAxisSpacing: 12, crossAxisSpacing: 12, itemCount: items.length, itemBuilder: (_, i) => ProductCard(product: items[i], onTap: () => _openDetail(items[i]), onLongPress: () => _menu(items[i])));
-  }
-
-  Widget _empty() => Center(child: Padding(padding: const EdgeInsets.all(32), child: Column(mainAxisSize: MainAxisSize.min, children: [const Icon(Icons.bookmark_add_outlined, size: 64, color: Colors.black38), const SizedBox(height: 12), const Text('Пока пусто', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900)), const SizedBox(height: 8), const Text('Поделитесь товаром из OZON через системную кнопку «Поделиться».', textAlign: TextAlign.center, style: TextStyle(color: Colors.black54)), const SizedBox(height: 16), OutlinedButton(onPressed: _manualAdd, child: const Text('Добавить ссылку'))])));
-
-  Future<void> _manualAdd() async {
+  Future<void> _showAddDialog() async {
     final c = TextEditingController();
-    final url = await showDialog<String>(context: context, builder: (_) => AlertDialog(title: const Text('Добавить товар'), content: TextField(controller: c, autofocus: true, keyboardType: TextInputType.url, decoration: const InputDecoration(hintText: 'https://www.ozon.ru/...')), actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Отмена')), FilledButton(onPressed: () => Navigator.pop(context, c.text.trim()), child: const Text('Продолжить'))]));
+    final url = await showDialog<String>(context: context, builder: (_) => AlertDialog(title: const Text('Добавить товар'), content: TextField(controller: c, autofocus: true, keyboardType: TextInputType.url, decoration: const InputDecoration(hintText: 'https://...')), actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Отмена')), FilledButton(onPressed: () => Navigator.pop(context, c.text.trim()), child: const Text('Добавить'))]));
     c.dispose();
-    if (!mounted) return;
     if (url != null && url.isNotEmpty) await _addUrl(url);
-  }
-
-  Future<void> _openDetail(Product product) async {
-    await Navigator.push<Product>(context, MaterialPageRoute(builder: (_) => ProductDetailScreen(product: product, tags: tags, repository: widget.repository)));
-    // Перечитываем данные: цена/история могли обновиться на экране деталей.
-    await _load();
-  }
-
-  Future<void> _menu(Product p) async {
-    final action = await showModalBottomSheet<String>(context: context, showDragHandle: true, builder: (_) => SafeArea(child: Column(mainAxisSize: MainAxisSize.min, children: [ListTile(leading: const Icon(Icons.edit_outlined), title: const Text('Изменить'), onTap: () => Navigator.pop(context, 'edit')), ListTile(leading: const Icon(Icons.open_in_new), title: const Text('Открыть магазин'), onTap: () => Navigator.pop(context, 'open')), ListTile(leading: const Icon(Icons.delete_outline), title: const Text('Удалить'), onTap: () => Navigator.pop(context, 'delete'))])));
-    if (action == null || !mounted) return;
-    if (action == 'edit') await _editProduct(p);
-    if (action == 'open') await launchUrl(Uri.parse(p.url), mode: LaunchMode.externalApplication);
-    if (action == 'delete') await _delete(p);
   }
 }
 
@@ -344,61 +325,19 @@ class ProductEditor extends StatefulWidget {
 }
 
 class _ProductEditorState extends State<ProductEditor> {
-  late final title = TextEditingController(text: widget.product.title);
-  late final price = TextEditingController(text: widget.product.price?.toString() ?? '');
-  late final image = TextEditingController(text: widget.product.imageUrl ?? '');
-  late final note = TextEditingController(text: widget.product.note);
-  late final tags = TextEditingController(text: _initialTagNames());
-  late final Set<String> selected = {...widget.product.boardIds};
-  late ProductStatus status = widget.product.status;
-  late int priority = widget.product.priority;
-
-  @override void dispose() { title.dispose(); price.dispose(); image.dispose(); note.dispose(); tags.dispose(); super.dispose(); }
-
-  @override
-  Widget build(BuildContext context) => Padding(padding: EdgeInsets.fromLTRB(16, 12, 16, 16 + MediaQuery.viewInsetsOf(context).bottom), child: SingleChildScrollView(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-    Text(widget.product.title, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900)), const SizedBox(height: 12),
-    TextField(controller: title, decoration: const InputDecoration(labelText: 'Название', border: OutlineInputBorder())), const SizedBox(height: 10),
-    Row(children: [Expanded(child: TextField(controller: price, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'Цена', border: OutlineInputBorder()))), const SizedBox(width: 8), Expanded(child: DropdownButtonFormField<ProductStatus>(initialValue: status, decoration: const InputDecoration(labelText: 'Статус', border: OutlineInputBorder()), items: ProductStatus.values.map((s) => DropdownMenuItem(value: s, child: Text(_status(s)))).toList(), onChanged: (v) => setState(() => status = v ?? status)))]), const SizedBox(height: 10),
-    TextField(controller: image, keyboardType: TextInputType.url, decoration: const InputDecoration(labelText: 'URL изображения', border: OutlineInputBorder())), const SizedBox(height: 10), TextField(controller: tags, decoration: const InputDecoration(labelText: 'Теги через запятую', border: OutlineInputBorder())), const SizedBox(height: 10), TextField(controller: note, maxLines: 3, decoration: const InputDecoration(labelText: 'Заметка', border: OutlineInputBorder())),
-    Row(children: [const Text('Приоритет'), Expanded(child: Slider(value: priority.toDouble(), min: 0, max: 3, divisions: 3, onChanged: (v) => setState(() => priority = v.round())))]), const Text('Доски', style: TextStyle(fontWeight: FontWeight.w800)),
-    ...widget.boards.map((b) => CheckboxListTile(contentPadding: EdgeInsets.zero, value: selected.contains(b.id), title: Text(b.name), onChanged: (v) => setState(() { if (v == true) { selected.add(b.id); } else { selected.remove(b.id); } }))), const SizedBox(height: 8),
-    SizedBox(width: double.infinity, child: FilledButton(onPressed: _save, child: const Text('Сохранить'))),
-  ])));
-
-  Future<void> _save() async {
-    final tagIds = await _resolveTagIds(tags.text);
-    if (!mounted) return;
-    Navigator.pop(context, widget.product.copyWith(title: title.text.trim().isEmpty ? 'Без названия' : title.text.trim(), price: double.tryParse(price.text.replaceAll(' ', '').replaceAll(',', '.')), imageUrl: image.text.trim().isEmpty ? null : image.text.trim(), note: note.text.trim(), tagIds: tagIds, boardIds: selected.toList(), status: status, priority: priority, updatedAt: DateTime.now()));
-  }
-
-  String _initialTagNames() {
-    final byId = {for (final t in widget.tags) t.id: t};
-    return widget.product.tagIds.map((id) => byId[id]?.name ?? '').where((n) => n.isNotEmpty).join(', ');
-  }
-
-  /// Преобразует введённые через запятую имена тегов в id:
-  /// существующие переиспользуются, новые создаются (корневые).
-  Future<List<String>> _resolveTagIds(String raw) async {
-    final names = raw.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toSet().toList();
-    if (names.isEmpty) return const [];
-    final byName = {for (final t in widget.tags) t.name.toLowerCase(): t};
-    final result = <String>[];
-    final created = <Tag>[];
-    for (final name in names) {
-      final existing = byName[name.toLowerCase()];
-      if (existing != null) {
-        result.add(existing.id);
-      } else {
-        final tag = Tag(id: widget.repository.newId(), name: name);
-        created.add(tag);
-        result.add(tag.id);
-      }
-    }
-    if (created.isNotEmpty) {
-      await widget.repository.saveTags([...widget.tags, ...created]);
-    }
-    return result;
-  }
-  String _status(ProductStatus s) => switch (s) { ProductStatus.wishlist => 'Хочу купить', ProductStatus.considering => 'Думаю', ProductStatus.purchased => 'Куплено', ProductStatus.archived => 'Архив' };
+  late Product p;
+  @override void initState() { super.initState(); p = widget.product; }
+  @override Widget build(BuildContext context) => DraggableScrollableSheet(expand: false, initialChildSize: .86, maxChildSize: .95, builder: (_, controller) => Material(color: Theme.of(context).scaffoldBackgroundColor, child: ListView(controller: controller, padding: const EdgeInsets.all(16), children: [
+    TextField(decoration: const InputDecoration(labelText: 'Название'), controller: TextEditingController(text: p.title), onChanged: (v) => p = p.copyWith(title: v)),
+    const SizedBox(height: 10),
+    TextField(decoration: const InputDecoration(labelText: 'URL'), controller: TextEditingController(text: p.url), onChanged: (v) => p = p.copyWith(url: v)),
+    const SizedBox(height: 10),
+    TextField(decoration: const InputDecoration(labelText: 'Цена'), keyboardType: TextInputType.number, controller: TextEditingController(text: p.price?.toStringAsFixed(0) ?? ''), onChanged: (v) => p = p.copyWith(price: double.tryParse(v.replaceAll(',', '.')))),
+    const SizedBox(height: 10),
+    DropdownButtonFormField<ProductStatus>(value: p.status, decoration: const InputDecoration(labelText: 'Статус'), items: ProductStatus.values.map((s) => DropdownMenuItem(value: s, child: Text(s.label))).toList(), onChanged: (v) => setState(() => p = p.copyWith(status: v ?? p.status))),
+    const SizedBox(height: 10),
+    TextField(decoration: const InputDecoration(labelText: 'Заметка'), controller: TextEditingController(text: p.note), minLines: 3, maxLines: 6, onChanged: (v) => p = p.copyWith(note: v)),
+    const SizedBox(height: 18),
+    FilledButton(onPressed: () => Navigator.pop(context, p), child: const Text('Сохранить')),
+  ]));
 }
