@@ -35,15 +35,16 @@ class ProductImporter {
   final bool _enableBrowserFallback;
 
   Future<ImportedProductData> fetch(Uri uri) async {
-    ImportedProductData data;
+    ImportedProductData data = const ImportedProductData();
+    Object? httpError;
     try {
       data = await _fetchHttp(uri);
-    } catch (_) {
-      data = const ImportedProductData();
+    } catch (error) {
+      httpError = error;
     }
 
     if (_enableBrowserFallback && _needsBrowserFallback(uri) &&
-        (data.price == null || data.imageUrl == null || data.title == null)) {
+        (httpError != null || data.price == null || data.imageUrl == null || data.title == null)) {
       try {
         final result = await _browserChannel.invokeMethod<dynamic>('resolveProduct', {'url': uri.toString()});
         if (result is Map) {
@@ -55,6 +56,9 @@ class ProductImporter {
             description: _nullableString(result['description']),
           );
           data = data.merge(browserData);
+          if (data.title != null || data.imageUrl != null || data.price != null || data.description != null) {
+            httpError = null;
+          }
         }
       } on MissingPluginException {
         // Browser fallback is Android-specific.
@@ -63,6 +67,7 @@ class ProductImporter {
       }
     }
 
+    if (httpError != null) throw httpError!;
     return data;
   }
 
