@@ -34,6 +34,26 @@ void main() {
       expect(data.description, 'Описание товара');
     });
 
+    test('extracts Ozon data from embedded price and gallery state', () async {
+      final client = MockClient((request) async {
+        return utf8Response('''
+          <html>
+            <body>
+              <div data-widget="webProductHeading"><h1>Кофе в зернах Test</h1></div>
+              <div id="state-webPrice-123-default-1" data-state='{"isAvailable":true,"price":"1 799 ₽","originalPrice":"2 399 ₽"}'></div>
+              <div id="state-webGallery-123-default-1" data-state='{"images":[{"src":"https://cdn.example.com/coffee.webp","alt":"Кофе"}]}'></div>
+            </body>
+          </html>
+        ''', 200);
+      });
+      final importer = ProductImporter(client: client);
+      final data = await importer.fetch(Uri.parse('https://www.ozon.ru/product/1234567/'));
+      expect(data.title, 'Кофе в зернах Test');
+      expect(data.price, 1799);
+      expect(data.currency, 'RUB');
+      expect(data.imageUrl, 'https://cdn.example.com/coffee.webp');
+    });
+
     test('falls back to JSON-LD when OG tags are missing', () async {
       final client = MockClient((request) async {
         return utf8Response('''
@@ -63,6 +83,8 @@ void main() {
       final data = await importer.fetch(Uri.parse('https://www.ozon.ru/product/1234567/'));
       expect(data.title, 'Товар из OZON');
       expect(data.imageUrl, 'https://cdn.example.com/pic.webp');
+      expect(data.price, 4990);
+      expect(data.currency, 'RUB');
     });
 
     test('does not canonicalize non-Ozon URLs and uses <title>', () async {
