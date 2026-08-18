@@ -326,8 +326,8 @@ class _HomeScreenState extends State<HomeScreen> {
         title: const Text('Тема оформления'),
         children: [
           SimpleDialogOption(onPressed: () => Navigator.pop(context, ThemeMode.system), child: const ListTile(leading: Icon(Icons.brightness_auto_outlined), title: Text('Системная'), subtitle: Text('Следовать настройкам устройства'))),
-          SimpleDialogOption(onPressed: () => Navigator.pop(context, ThemeMode.light), child: const ListTile(leading: const Icon(Icons.light_mode_outlined), title: Text('Светлая'))),
-          SimpleDialogOption(onPressed: () => Navigator.pop(context, ThemeMode.dark), child: const ListTile(leading: const Icon(Icons.dark_mode_outlined), title: Text('Тёмная'))),
+          SimpleDialogOption(onPressed: () => Navigator.pop(context, ThemeMode.light), child: const ListTile(leading: Icon(Icons.light_mode_outlined), title: Text('Светлая')),
+          SimpleDialogOption(onPressed: () => Navigator.pop(context, ThemeMode.dark), child: const ListTile(leading: Icon(Icons.dark_mode_outlined), title: Text('Тёмная'))),
         ],
       ),
     );
@@ -351,7 +351,16 @@ class _HomeScreenState extends State<HomeScreen> {
           if (mounted) _snack('Некорректная резервная копия');
         }
       }),
-      Padding(padding: const EdgeInsets.fromLTRB(16, 0, 16, 20), child: Align(alignment: Alignment.centerLeft, child: Text('Только локальное хранение. Облачной синхронизации нет.', style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant)))))),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: Text(
+            'Только локальное хранение. Облачной синхронизации нет.',
+            style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
+          ),
+        ),
+      ),
     ])));
   }
 
