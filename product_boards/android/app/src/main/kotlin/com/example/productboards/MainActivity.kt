@@ -26,6 +26,7 @@ class MainActivity : FlutterActivity() {
     private var activeBrowserRequest: BrowserRequest? = null
     private var activeBrowser: WebView? = null
     private var browserFinished = false
+    private var browserAttempt = 0
 
     private data class BrowserRequest(
         val url: String,
@@ -111,6 +112,7 @@ class MainActivity : FlutterActivity() {
         if (activeBrowserRequest != null || browserQueue.isEmpty()) return
         activeBrowserRequest = browserQueue.removeFirst()
         browserFinished = false
+        browserAttempt = 0
 
         val request = activeBrowserRequest ?: return
         val webView = WebView(this)
@@ -119,6 +121,8 @@ class MainActivity : FlutterActivity() {
         webView.settings.domStorageEnabled = true
         webView.settings.databaseEnabled = true
         webView.settings.loadsImagesAutomatically = true
+        webView.settings.allowContentAccess = true
+        webView.settings.allowFileAccess = true
         webView.settings.userAgentString = "Mozilla/5.0 (Linux; Android 14; K) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36"
         webView.alpha = 0f
         webView.layoutParams = FrameLayout.LayoutParams(1, 1)
@@ -126,7 +130,7 @@ class MainActivity : FlutterActivity() {
         (findViewById<FrameLayout>(android.R.id.content))?.addView(webView)
         webView.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView?, url: String?) {
-                browserHandler.postDelayed({ extractBrowserData(webView) }, 1800L)
+                browserHandler.postDelayed({ extractBrowserData(webView) }, 2200L)
             }
 
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean = false
@@ -134,61 +138,130 @@ class MainActivity : FlutterActivity() {
 
         browserHandler.postDelayed({
             if (!browserFinished) finishBrowserResolve(null)
-        }, 15000L)
+        }, 18000L)
 
         webView.loadUrl(request.url)
     }
 
     private fun extractBrowserData(webView: WebView) {
         if (browserFinished) return
+        browserAttempt++
+
         val script = """
             (function() {
               const clean = v => v == null ? null : String(v).replace(/\\s+/g, ' ').trim();
+              const host = location.host.toLowerCase();
               const meta = name => {
                 const a = document.querySelector('meta[property="' + name + '"]');
                 const b = document.querySelector('meta[name="' + name + '"]');
                 return clean((a || b)?.content);
               };
+              const normalizeUrl = v => {
+                if (!v) return null;
+                v = String(v).trim().replace(/\\u002F/g, '/').replace(/\\\\\//g, '/');
+                if (v.startsWith('//')) v = location.protocol + v;
+                return /^https?:\\/\\//i.test(v) ? v : null;
+              };
               const attrs = el => {
                 if (!el) return null;
-                for (const k of ['src','data-src','data-original','content','href']) {
-                  const v = el.getAttribute(k);
-                  if (v && /^https?:\\/\\//i.test(v)) return v;
+                for (const k of ['src','data-src','data-original','data-lazy-src','content','href']) {
+                  const v = normalizeUrl(el.getAttribute(k));
+                  if (v) return v;
                 }
-                const srcset = el.getAttribute('srcset');
+                const srcset = el.getAttribute('srcset') || el.getAttribute('data-srcset');
                 if (srcset) {
-                  const first = srcset.split(',')[0].trim().split(' ')[0];
-                  if (/^https?:\\/\\//i.test(first)) return first;
+                  for (const part of srcset.split(',')) {
+                    const v = normalizeUrl(part.trim().split(/\\s+/)[0]);
+                    if (v) return v;
+                  }
                 }
                 return null;
               };
-              let title = meta('og:title') || meta('twitter:title') || clean(document.querySelector('[data-widget="webProductHeading"] h1')?.innerText) || clean(document.querySelector('h1')?.innerText) || clean(document.title);
-              let image = meta('og:image') || meta('twitter:image') || attrs(document.querySelector('[itemprop="image"]'));
+              const visible = el => {
+                if (!el) return false;
+                const r = el.getBoundingClientRect();
+                return r.width >= 80 && r.height >= 80;
+              };
+              const textOf = selector => {
+                const el = document.querySelector(selector);
+                return clean(el?.innerText || el?.textContent);
+              };
+
+              let title = meta('og:title') || meta('twitter:title');
+              const titleSelectors = host.includes('wildberries')
+                ? ['h1[class*="product-page"]','h1[class*="ProductCard"]','h1']
+                : ['[data-widget="webProductHeading"] h1','[data-widget="webProductHeading"] h2','h1'];
+              for (const selector of titleSelectors) {
+                if (!title) title = textOf(selector);
+              }
+              if (!title) title = clean(document.title);
+
+              let image = meta('og:image') || meta('twitter:image');
+              const imageSelectors = host.includes('wildberries')
+                ? ['[class*="photo"] img','[class*="productCard"] img','picture img','img']
+                : ['[data-widget*="Gallery"] img','[class*="gallery"] img','picture img','img'];
               if (!image) {
-                for (const img of document.images) {
-                  const src = attrs(img);
-                  if (src) { image = src; break; }
+                for (const selector of imageSelectors) {
+                  for (const el of document.querySelectorAll(selector)) {
+                    if (!visible(el) && selector.endsWith('img')) continue;
+                    const src = attrs(el);
+                    if (src && !/(logo|sprite|avatar|icon|favicon)/i.test(src)) {
+                      image = src;
+                      break;
+                    }
+                  }
+                  if (image) break;
                 }
               }
-              let currency = meta('product:price:currency');
+
+              let currency = meta('product:price:currency') || (host.includes('wildberries') ? 'RUB' : null);
               let price = null;
-              const priceText = meta('product:price:amount') || clean(document.querySelector('[data-widget*="price" i]')?.innerText) || clean(document.body?.innerText);
-              const scriptText = Array.from(document.scripts).map(s => s.textContent || '').join(' ');
-              const allText = (priceText || '') + ' ' + scriptText;
-              const rub = allText.match(/([0-9][0-9\\s\\u00a0\\u202f,.]*)\\s*(?:₽|руб\\.?|RUB)\\b/i);
-              const quoted = allText.match(/(?:"price"|"currentPrice"|"salePrice")\\s*:\s*"?([0-9][0-9\\s.,\\u00a0\\u202f]*)/i);
-              const candidate = rub ? rub[1] : (quoted ? quoted[1] : null);
-              if (candidate) {
-                const normalized = candidate.replace(/[\\s\\u00a0\\u202f]/g, '').replace(',', '.');
-                const parsed = parseFloat(normalized);
-                if (!Number.isNaN(parsed) && parsed > 0) price = parsed;
-                if (!currency && rub) currency = 'RUB';
+              const priceSelectors = host.includes('wildberries')
+                ? ['[class*="price-block"]','[class*="priceBlock"]','[class*="price"]','[data-testid*="price"]']
+                : ['[data-widget*="price"]','[class*="price"]','[data-testid*="price"]'];
+              const priceTexts = [];
+              for (const selector of priceSelectors) {
+                for (const el of document.querySelectorAll(selector)) {
+                  const t = clean(el.innerText || el.textContent);
+                  if (t && /\\d/.test(t)) priceTexts.push(t);
+                  if (priceTexts.length >= 20) break;
+                }
+                if (priceTexts.length >= 20) break;
               }
-              return JSON.stringify({title, imageUrl:image, price, currency, description:meta('og:description') || meta('twitter:description')});
+              const bodyText = clean(document.body?.innerText || '');
+              const scriptText = Array.from(document.scripts).map(s => s.textContent || '').join(' ');
+              const allText = priceTexts.join(' ') + ' ' + bodyText.slice(0, 120000) + ' ' + scriptText.slice(0, 250000);
+
+              const rubPatterns = [
+                /([0-9][0-9\\s\\u00a0\\u202f,.]*)\\s*(?:₽|руб\\.?|RUB)\\b/i,
+                /(?:₽|руб\\.?|RUB)\\s*([0-9][0-9\\s\\u00a0\\u202f,.]*)/i
+              ];
+              const quotedPatterns = [
+                /["'](?:price|currentPrice|salePrice|finalPrice)["']\\s*:\\s*["']?([0-9][0-9\\s.,\\u00a0\\u202f]*)/i,
+                /["']priceFormatted["']\\s*:\\s*["']([^"']+)["']/i
+              ];
+              let candidate = null;
+              for (const re of rubPatterns) {
+                const m = allText.match(re);
+                if (m) { candidate = m[1]; break; }
+              }
+              if (!candidate) {
+                for (const re of quotedPatterns) {
+                  const m = allText.match(re);
+                  if (m) { candidate = m[1]; break; }
+                }
+              }
+              if (candidate) {
+                const normalized = candidate.replace(/[\\s\\u00a0\\u202f]/g, '').replace(/(?<=\\d),(?=\\d)/g, '.').replace(/[^0-9.]/g, '');
+                const parsed = parseFloat(normalized);
+                if (!Number.isNaN(parsed) && parsed > 0 && parsed < 100000000) price = parsed;
+              }
+
+              return JSON.stringify({title, imageUrl:image, price, currency, description:meta('og:description') || meta('twitter:description'), host});
             })();
         """.trimIndent()
 
-        webView.evaluateJavascript(script) { rawResult ->
+        webView.evaluateJavascript("window.scrollTo(0, Math.min(document.body.scrollHeight, 1400)); $script") { rawResult ->
             try {
                 val jsonString = JSONTokener(rawResult ?: "null").nextValue()
                 val json = if (jsonString is String) org.json.JSONObject(jsonString) else null
@@ -202,9 +275,18 @@ class MainActivity : FlutterActivity() {
                         "description" to json.optString("description", null),
                     )
                 } else null
-                finishBrowserResolve(result)
+                val hasUsefulData = result?.values?.any { it != null && it.toString().isNotBlank() && it.toString() != "null" } == true
+                if (!hasUsefulData && browserAttempt < 3) {
+                    browserHandler.postDelayed({ extractBrowserData(webView) }, 1800L)
+                } else {
+                    finishBrowserResolve(result)
+                }
             } catch (_: Exception) {
-                finishBrowserResolve(null)
+                if (browserAttempt < 3) {
+                    browserHandler.postDelayed({ extractBrowserData(webView) }, 1800L)
+                } else {
+                    finishBrowserResolve(null)
+                }
             }
         }
     }
