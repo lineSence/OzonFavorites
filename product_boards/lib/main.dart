@@ -7,6 +7,7 @@ import 'models/product.dart';
 import 'models/tag.dart';
 import 'repositories/local_repository.dart';
 import 'repositories/product_repository.dart';
+import 'screens/product_detail_screen.dart';
 import 'services/backup_service.dart';
 import 'services/price_tracker.dart';
 import 'services/product_importer.dart';
@@ -186,7 +187,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     final normalized = _normalize(uri.toString());
     final duplicate = products.cast<Product?>().firstWhere((p) => p != null && _normalize(p.url) == normalized, orElse: () => null);
-    if (duplicate != null) { await _editProduct(duplicate); return; }
+    if (duplicate != null) { await _openProduct(duplicate); return; }
     setState(() => importing = true);
     ImportedProductData data = const ImportedProductData();
     try { data = await importer.fetch(uri); } catch (_) {}
@@ -199,7 +200,7 @@ class _HomeScreenState extends State<HomeScreen> {
     await widget.repository.upsertProduct(product);
     if (!mounted) return;
     setState(() { products = [product, ...products]; importing = false; });
-    await _editProduct(product);
+    await _openProduct(product);
   }
 
   String _normalize(String value) => (Uri.tryParse(value)?.replace(query: '', fragment: '').toString() ?? value).replaceAll(RegExp(r'/$'), '').toLowerCase();
@@ -252,6 +253,13 @@ class _HomeScreenState extends State<HomeScreen> {
       case SortMode.priority: list.sort((a,b) => b.priority.compareTo(a.priority));
     }
     return list;
+  }
+
+  Future<void> _openProduct(Product product) async {
+    await Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => ProductDetailScreen(product: product, tags: tags, repository: widget.repository),
+    ));
+    await _load();
   }
 
   Future<void> _editProduct(Product product) async {
@@ -406,7 +414,41 @@ class _HomeScreenState extends State<HomeScreen> {
             PopupMenuItem(value: SortMode.priority, child: Text('Приоритет')),
           ], icon: const Icon(Icons.sort)),
         ])),
-        Expanded(child: items.isEmpty ? const Center(child: Text('Добавьте товар через кнопку + или поделитесь ссылкой из магазина.')) : layout == LayoutMode.masonry ? MasonryGridView.count(padding: const EdgeInsets.all(12), crossAxisCount: 2, mainAxisSpacing: 10, crossAxisSpacing: 10, itemCount: items.length, itemBuilder: (_, i) => ProductCard(product: items[i], onTap: () => _editProduct(items[i]), onLongPress: () => _delete(items[i]))) : ListView.separated(padding: const EdgeInsets.all(12), itemCount: items.length, separatorBuilder: (context, index) => const SizedBox(height: 8), itemBuilder: (_, i) => ProductListTile(product: items[i], onTap: () => _editProduct(items[i]), onLongPress: () => _delete(items[i])))),
+        Expanded(
+          child: items.isEmpty
+              ? const Center(
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 24),
+                    child: Text(
+                      'Добавьте товар через кнопку + или поделитесь ссылкой из магазина.',
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                )
+              : layout == LayoutMode.masonry
+                  ? MasonryGridView.count(
+                      padding: const EdgeInsets.all(12),
+                      crossAxisCount: 2,
+                      mainAxisSpacing: 10,
+                      crossAxisSpacing: 10,
+                      itemCount: items.length,
+                      itemBuilder: (_, i) => ProductCard(
+                        product: items[i],
+                        onTap: () => _openProduct(items[i]),
+                        onLongPress: () => _editProduct(items[i]),
+                      ),
+                    )
+                  : ListView.separated(
+                      padding: const EdgeInsets.all(12),
+                      itemCount: items.length,
+                      separatorBuilder: (context, index) => const SizedBox(height: 8),
+                      itemBuilder: (_, i) => ProductListTile(
+                        product: items[i],
+                        onTap: () => _openProduct(items[i]),
+                        onLongPress: () => _editProduct(items[i]),
+                      ),
+                    ),
+        ),
       ]),
       floatingActionButton: FloatingActionButton.extended(onPressed: () => _showAddDialog(), icon: const Icon(Icons.add), label: const Text('Добавить')),
     );
