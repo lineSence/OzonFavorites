@@ -77,7 +77,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
       body: ListView(padding: const EdgeInsets.all(16), children: [
         if (current.imageUrl != null && current.imageUrl!.isNotEmpty)
           ClipRRect(borderRadius: BorderRadius.circular(18), child: Image.network(current.imageUrl!, height: 340, fit: BoxFit.cover,
-            errorBuilder: (_, __, ___) => _imagePlaceholder()))
+            errorBuilder: (context, error, stackTrace) => _imagePlaceholder()))
         else
           _imagePlaceholder(),
         const SizedBox(height: 18),
