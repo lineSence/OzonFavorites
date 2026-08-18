@@ -18,13 +18,18 @@ class ProductCard extends StatelessWidget {
         onTap: onTap,
         onLongPress: onLongPress,
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          if (product.imageUrl != null && product.imageUrl!.isNotEmpty)
-            AspectRatio(
-              aspectRatio: 1,
-              child: _productImage(product.imageUrl!, fit: BoxFit.cover),
-            )
-          else
-            const AspectRatio(aspectRatio: 1, child: PlaceholderImage()),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final size = constraints.maxWidth.isFinite ? constraints.maxWidth.clamp(0.0, 320.0) : 320.0;
+              return SizedBox(
+                width: double.infinity,
+                height: size,
+                child: product.imageUrl != null && product.imageUrl!.isNotEmpty
+                    ? _productImage(product.imageUrl!, fit: BoxFit.cover)
+                    : const PlaceholderImage(),
+              );
+            },
+          ),
           Padding(
             padding: const EdgeInsets.fromLTRB(10, 9, 10, 11),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
