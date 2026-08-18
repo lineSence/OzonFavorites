@@ -151,6 +151,7 @@ class MainActivity : FlutterActivity() {
             (function() {
               const clean = v => v == null ? null : String(v).replace(/\\s+/g, ' ').trim();
               const host = location.host.toLowerCase();
+              const isAvito = host.includes('avito');
               const meta = name => {
                 const a = document.querySelector('meta[property="' + name + '"]');
                 const b = document.querySelector('meta[name="' + name + '"]');
@@ -162,17 +163,24 @@ class MainActivity : FlutterActivity() {
                 if (v.startsWith('//')) v = location.protocol + v;
                 return /^https?:\\/\\//i.test(v) ? v : null;
               };
+              const genericImage = v => {
+                if (!v) return true;
+                const s = String(v).toLowerCase();
+                if (/(logo|favicon|sprite|avatar|placeholder|brand)/i.test(s)) return true;
+                if (isAvito && /(avito\\.(?:ru|st)|static|cdn).*?(logo|favicon|brand)/i.test(s)) return true;
+                return false;
+              };
               const attrs = el => {
                 if (!el) return null;
                 for (const k of ['src','data-src','data-original','data-lazy-src','content','href']) {
                   const v = normalizeUrl(el.getAttribute(k));
-                  if (v) return v;
+                  if (v && !genericImage(v)) return v;
                 }
                 const srcset = el.getAttribute('srcset') || el.getAttribute('data-srcset');
                 if (srcset) {
                   for (const part of srcset.split(',')) {
                     const v = normalizeUrl(part.trim().split(/\\s+/)[0]);
-                    if (v) return v;
+                    if (v && !genericImage(v)) return v;
                   }
                 }
                 return null;
@@ -196,16 +204,20 @@ class MainActivity : FlutterActivity() {
               }
               if (!title) title = clean(document.title);
 
-              let image = meta('og:image') || meta('twitter:image');
-              const imageSelectors = host.includes('wildberries')
-                ? ['[class*="photo"] img','[class*="productCard"] img','picture img','img']
-                : ['[data-widget*="Gallery"] img','[class*="gallery"] img','picture img','img'];
+              let image = genericImage(meta('og:image')) ? null : meta('og:image');
+              if (!image) image = genericImage(meta('twitter:image')) ? null : meta('twitter:image');
+              if (!image) image = attrs(document.querySelector('[itemprop="image"]'));
+              const imageSelectors = isAvito
+                ? ['[data-marker*="item"] img','[class*="gallery"] img','[class*="photo"] img','picture img','img']
+                : host.includes('wildberries')
+                  ? ['[class*="photo"] img','[class*="productCard"] img','picture img','img']
+                  : ['[data-widget*="Gallery"] img','[class*="gallery"] img','picture img','img'];
               if (!image) {
                 for (const selector of imageSelectors) {
                   for (const el of document.querySelectorAll(selector)) {
                     if (!visible(el) && selector.endsWith('img')) continue;
                     const src = attrs(el);
-                    if (src && !/(logo|sprite|avatar|icon|favicon)/i.test(src)) {
+                    if (src) {
                       image = src;
                       break;
                     }
@@ -214,11 +226,13 @@ class MainActivity : FlutterActivity() {
                 }
               }
 
-              let currency = meta('product:price:currency') || (host.includes('wildberries') ? 'RUB' : null);
+              let currency = meta('product:price:currency') || (host.includes('wildberries') || isAvito ? 'RUB' : null);
               let price = null;
-              const priceSelectors = host.includes('wildberries')
-                ? ['[class*="price-block"]','[class*="priceBlock"]','[class*="price"]','[data-testid*="price"]']
-                : ['[data-widget*="price"]','[class*="price"]','[data-testid*="price"]'];
+              const priceSelectors = isAvito
+                ? ['[itemprop="price"]','[data-marker*="item-price"]','[data-marker*="price"]','[class*="price"]']
+                : host.includes('wildberries')
+                  ? ['[class*="price-block"]','[class*="priceBlock"]','[class*="price"]','[data-testid*="price"]']
+                  : ['[data-widget*="price"]','[class*="price"]','[data-testid*="price"]'];
               const priceTexts = [];
               for (const selector of priceSelectors) {
                 for (const el of document.querySelectorAll(selector)) {
