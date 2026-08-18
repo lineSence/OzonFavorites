@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'models/board.dart';
 import 'models/product.dart';
@@ -29,10 +30,12 @@ class ProductBoardsApp extends StatefulWidget {
 class _ProductBoardsAppState extends State<ProductBoardsApp> {
   static const shareChannel = MethodChannel('product_boards/share');
   SharePayload? sharedPayload;
+  ThemeMode themeMode = ThemeMode.system;
 
   @override
   void initState() {
     super.initState();
+    _loadThemeMode();
     shareChannel.setMethodCallHandler((call) async {
       if (call.method == 'sharedData' && call.arguments is Map) {
         setState(() => sharedPayload = SharePayload.fromMap(Map<Object?, Object?>.from(call.arguments as Map)));
@@ -45,12 +48,58 @@ class _ProductBoardsAppState extends State<ProductBoardsApp> {
     });
   }
 
+  Future<void> _loadThemeMode() async {
+    final prefs = await SharedPreferences.getInstance();
+    final value = prefs.getString('theme_mode');
+    if (!mounted) return;
+    setState(() {
+      themeMode = switch (value) {
+        'light' => ThemeMode.light,
+        'dark' => ThemeMode.dark,
+        _ => ThemeMode.system,
+      };
+    });
+  }
+
+  Future<void> _setThemeMode(ThemeMode mode) async {
+    setState(() => themeMode = mode);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('theme_mode', switch (mode) {
+      ThemeMode.light => 'light',
+      ThemeMode.dark => 'dark',
+      ThemeMode.system => 'system',
+    });
+  }
+
+  ThemeData _lightTheme() => ThemeData(
+    useMaterial3: true,
+    colorScheme: ColorScheme.fromSeed(seedColor: Colors.black, brightness: Brightness.light),
+    scaffoldBackgroundColor: const Color(0xfff6f6f4),
+    inputDecorationTheme: const InputDecorationTheme(filled: true),
+  );
+
+  ThemeData _darkTheme() => ThemeData(
+    useMaterial3: true,
+    colorScheme: ColorScheme.fromSeed(seedColor: Colors.white, brightness: Brightness.dark),
+    scaffoldBackgroundColor: const Color(0xff121212),
+    cardColor: const Color(0xff1d1d1d),
+    inputDecorationTheme: const InputDecorationTheme(filled: true),
+  );
+
   @override
   Widget build(BuildContext context) => MaterialApp(
     debugShowCheckedModeBanner: false,
     title: 'Pinzon',
-    theme: ThemeData(useMaterial3: true, colorScheme: ColorScheme.fromSeed(seedColor: Colors.black), scaffoldBackgroundColor: const Color(0xfff6f6f4)),
-    home: HomeScreen(repository: widget.repository, sharedPayload: sharedPayload, consumeSharedPayload: () => setState(() => sharedPayload = null)),
+    theme: _lightTheme(),
+    darkTheme: _darkTheme(),
+    themeMode: themeMode,
+    home: HomeScreen(
+      repository: widget.repository,
+      sharedPayload: sharedPayload,
+      themeMode: themeMode,
+      onThemeModeChanged: _setThemeMode,
+      consumeSharedPayload: () => setState(() => sharedPayload = null),
+    ),
   );
 }
 
@@ -68,10 +117,12 @@ class SharePayload {
 }
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key, required this.repository, required this.consumeSharedPayload, this.sharedPayload});
+  const HomeScreen({super.key, required this.repository, required this.consumeSharedPayload, this.sharedPayload, required this.themeMode, required this.onThemeModeChanged});
   final ProductRepository repository;
   final VoidCallback consumeSharedPayload;
   final SharePayload? sharedPayload;
+  final ThemeMode themeMode;
+  final ValueChanged<ThemeMode> onThemeModeChanged;
   @override State<HomeScreen> createState() => _HomeScreenState();
 }
 
@@ -119,8 +170,6 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _consumeIncoming() async {
-    // Дожидаемся загрузки данных, чтобы проверка дубликатов по URL работала
-    // даже при cold start, когда share приходит до завершения _load().
     await _loadFuture;
     if (!mounted) return;
     final payload = widget.sharedPayload;
@@ -158,9 +207,7 @@ class _HomeScreenState extends State<HomeScreen> {
   String _source(Uri u) { final h = u.host.toLowerCase(); if (h.contains('ozon')) return 'OZON'; if (h.contains('wildberries')) return 'Wildberries'; if (h.contains('amazon')) return 'Amazon'; if (h.contains('market.yandex')) return 'Яндекс Маркет'; return h.isEmpty ? 'Другое' : h; }
   String _fallbackTitle(Uri u) {
     final segments = u.pathSegments;
-    if (segments.length >= 2 && segments.first.toLowerCase() == 'product') {
-      return 'Товар OZON ${segments.last}';
-    }
+    if (segments.length >= 2 && segments.first.toLowerCase() == 'product') return 'Товар OZON ${segments.last}';
     return 'Новый товар';
   }
 
@@ -248,14 +295,34 @@ class _HomeScreenState extends State<HomeScreen> {
     if (!mounted) return;
     setState(() => refreshingPrices = false);
     await _load();
-    if (showSummary && mounted) {
-      _snack(updated == 0 && failed == 0 ? 'Цены не изменились' : 'Обновлено цен: $updated, ошибок: $failed');
-    }
+    if (showSummary && mounted) _snack(updated == 0 && failed == 0 ? 'Цены не изменились' : 'Обновлено цен: $updated, ошибок: $failed');
+  }
+
+  String _themeLabel() => switch (widget.themeMode) {
+    ThemeMode.system => 'Системная',
+    ThemeMode.light => 'Светлая',
+    ThemeMode.dark => 'Тёмная',
+  };
+
+  Future<void> _chooseTheme() async {
+    final selected = await showDialog<ThemeMode>(
+      context: context,
+      builder: (_) => SimpleDialog(
+        title: const Text('Тема оформления'),
+        children: [
+          SimpleDialogOption(onPressed: () => Navigator.pop(context, ThemeMode.system), child: const ListTile(leading: Icon(Icons.brightness_auto_outlined), title: Text('Системная'), subtitle: Text('Следовать настройкам устройства'))),
+          SimpleDialogOption(onPressed: () => Navigator.pop(context, ThemeMode.light), child: const ListTile(leading: Icon(Icons.light_mode_outlined), title: Text('Светлая'))),
+          SimpleDialogOption(onPressed: () => Navigator.pop(context, ThemeMode.dark), child: const ListTile(leading: Icon(Icons.dark_mode_outlined), title: Text('Тёмная'))),
+        ],
+      ),
+    );
+    if (selected != null) await widget.onThemeModeChanged(selected);
   }
 
   Future<void> _settings() async {
     await showModalBottomSheet(context: context, showDragHandle: true, builder: (_) => SafeArea(child: Column(mainAxisSize: MainAxisSize.min, children: [
       const ListTile(title: Text('Настройки', style: TextStyle(fontWeight: FontWeight.w800))),
+      ListTile(leading: const Icon(Icons.palette_outlined), title: const Text('Тема оформления'), trailing: Text(_themeLabel()), onTap: () async { Navigator.pop(context); await _chooseTheme(); }),
       ListTile(leading: const Icon(Icons.upload_outlined), title: const Text('Поделиться резервной копией'), onTap: () async { Navigator.pop(context); await backupService.shareJson(await widget.repository.exportData()); }),
       ListTile(leading: const Icon(Icons.download_outlined), title: const Text('Восстановить из буфера обмена'), onTap: () async {
         Navigator.pop(context);
@@ -269,7 +336,7 @@ class _HomeScreenState extends State<HomeScreen> {
           if (mounted) _snack('Некорректная резервная копия');
         }
       }),
-      const Padding(padding: EdgeInsets.fromLTRB(16, 0, 16, 20), child: Align(alignment: Alignment.centerLeft, child: Text('Только локальное хранение. Облачной синхронизации нет.', style: TextStyle(color: Colors.black54)))),
+      Padding(padding: const EdgeInsets.fromLTRB(16, 0, 16, 20), child: Align(alignment: Alignment.centerLeft, child: Text('Только локальное хранение. Облачной синхронизации нет.', style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant))),
     ])));
   }
 
@@ -293,7 +360,7 @@ class _HomeScreenState extends State<HomeScreen> {
       ]))),
       body: Column(children: [
         Padding(padding: const EdgeInsets.fromLTRB(12, 8, 12, 4), child: Row(children: [
-          Expanded(child: TextField(decoration: const InputDecoration(prefixIcon: Icon(Icons.search), hintText: 'Поиск по товарам', filled: true, border: OutlineInputBorder(borderSide: BorderSide.none)), onChanged: (v) => setState(() => query = v))),
+          Expanded(child: TextField(decoration: InputDecoration(prefixIcon: const Icon(Icons.search), hintText: 'Поиск по товарам', filled: true, border: const OutlineInputBorder(borderSide: BorderSide.none), fillColor: Theme.of(context).colorScheme.surfaceContainerHighest), onChanged: (v) => setState(() => query = v))),
           const SizedBox(width: 8),
           PopupMenuButton<SortMode>(initialValue: sort, onSelected: (v) => setState(() => sort = v), itemBuilder: (_) => const [
             PopupMenuItem(value: SortMode.newest, child: Text('Новые')),
