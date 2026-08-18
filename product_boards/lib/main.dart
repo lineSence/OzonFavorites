@@ -141,6 +141,7 @@ class _HomeScreenState extends State<HomeScreen> {
   bool refreshingPrices = false;
   String query = '';
   int selectedBoard = 0;
+  String? selectedSource;
   SortMode sort = SortMode.newest;
   LayoutMode layout = LayoutMode.masonry;
 
@@ -204,7 +205,16 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   String _normalize(String value) => (Uri.tryParse(value)?.replace(query: '', fragment: '').toString() ?? value).replaceAll(RegExp(r'/$'), '').toLowerCase();
-  String _source(Uri u) { final h = u.host.toLowerCase(); if (h.contains('ozon')) return 'OZON'; if (h.contains('wildberries')) return 'Wildberries'; if (h.contains('amazon')) return 'Amazon'; if (h.contains('market.yandex')) return 'Яндекс Маркет'; return h.isEmpty ? 'Другое' : h; }
+  String _source(Uri u) {
+    final h = u.host.toLowerCase();
+    if (h.contains('ozon')) return 'OZON';
+    if (h.contains('wildberries')) return 'Wildberries';
+    if (h.contains('amazon')) return 'Amazon';
+    if (h.contains('market.yandex')) return 'Яндекс Маркет';
+    if (h.contains('avito')) return 'Avito';
+    return h.isEmpty ? 'Другое' : h;
+  }
+
   String _fallbackTitle(Uri u) {
     final segments = u.pathSegments;
     if (segments.length >= 2 && segments.first.toLowerCase() == 'product') return 'Товар OZON ${segments.last}';
@@ -222,8 +232,15 @@ class _HomeScreenState extends State<HomeScreen> {
     return p.tagIds.map((id) => byId[id]?.name ?? '').where((n) => n.isNotEmpty).join(' ');
   }
 
+  List<String> get sources {
+    final values = products.map((p) => p.source.trim()).where((s) => s.isNotEmpty).toSet().toList();
+    values.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    return values;
+  }
+
   List<Product> get visible {
     Iterable<Product> out = products;
+    if (selectedSource != null) out = out.where((p) => p.source == selectedSource);
     if (selectedBoard > 0 && selectedBoard <= boards.length) out = out.where((p) => p.boardIds.contains(boards[selectedBoard - 1].id));
     final q = query.trim().toLowerCase();
     if (q.isNotEmpty) out = out.where((p) => '${p.title} ${p.source} ${p.note} ${_tagNames(p)}'.toLowerCase().contains(q));
@@ -353,9 +370,20 @@ class _HomeScreenState extends State<HomeScreen> {
         IconButton(tooltip: 'Настройки', onPressed: _settings, icon: const Icon(Icons.settings_outlined)),
       ]),
       drawer: Drawer(child: SafeArea(child: ListView(padding: const EdgeInsets.all(12), children: [
-        const Padding(padding: EdgeInsets.all(12), child: Text('Доски', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900))),
-        ListTile(leading: const Icon(Icons.home_outlined), title: const Text('Все товары'), selected: selectedBoard == 0, onTap: () { Navigator.pop(context); setState(() => selectedBoard = 0); }),
-        ...boards.asMap().entries.map((e) => ListTile(leading: const Icon(Icons.dashboard_outlined), title: Text(e.value.name), selected: selectedBoard == e.key + 1, onTap: () { Navigator.pop(context); setState(() => selectedBoard = e.key + 1); })),
+        const Padding(padding: EdgeInsets.all(12), child: Text('Pinzon', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900))),
+        ListTile(leading: const Icon(Icons.home_outlined), title: const Text('Все товары'), selected: selectedSource == null && selectedBoard == 0, onTap: () { Navigator.pop(context); setState(() { selectedSource = null; selectedBoard = 0; }); }),
+        const Divider(),
+        const Padding(padding: EdgeInsets.fromLTRB(12, 8, 12, 4), child: Text('Сайты', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: Colors.grey))),
+        ...sources.map((source) => ListTile(
+          leading: Icon(source == 'OZON' ? Icons.shopping_bag_outlined : source == 'Wildberries' ? Icons.storefront_outlined : source == 'Avito' ? Icons.local_offer_outlined : Icons.language_outlined),
+          title: Text(source),
+          trailing: Text('${products.where((p) => p.source == source).length}'),
+          selected: selectedSource == source,
+          onTap: () { Navigator.pop(context); setState(() { selectedSource = source; selectedBoard = 0; }); },
+        )),
+        if (sources.isNotEmpty) const Divider(),
+        const Padding(padding: EdgeInsets.fromLTRB(12, 8, 12, 4), child: Text('Доски', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: Colors.grey))),
+        ...boards.asMap().entries.map((e) => ListTile(leading: const Icon(Icons.dashboard_outlined), title: Text(e.value.name), selected: selectedSource == null && selectedBoard == e.key + 1, onTap: () { Navigator.pop(context); setState(() { selectedSource = null; selectedBoard = e.key + 1; }); })),
         const Divider(), ListTile(leading: const Icon(Icons.add), title: const Text('Создать доску'), onTap: () { Navigator.pop(context); _createBoard(); }),
       ]))),
       body: Column(children: [
