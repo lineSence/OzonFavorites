@@ -35,9 +35,8 @@ jobs:
         run: flutter --version
 
       - name: Get dependencies
-        working-directory: product_boards
         run: flutter pub get
-        
+
       - name: Analyze
         run: flutter analyze
 
