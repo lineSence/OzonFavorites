@@ -24,7 +24,7 @@ class ProductCard extends StatelessWidget {
               child: _productImage(product.imageUrl!, fit: BoxFit.cover),
             )
           else
-            const AspectRatio(aspectRatio: 1, child: _PlaceholderImage()),
+            const AspectRatio(aspectRatio: 1, child: PlaceholderImage()),
           Padding(
             padding: const EdgeInsets.fromLTRB(10, 9, 10, 11),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -48,12 +48,14 @@ class ProductCard extends StatelessWidget {
 
 Widget _productImage(String value, {BoxFit fit = BoxFit.cover}) {
   final uri = Uri.tryParse(value);
-  if (uri?.scheme == 'file') return Image.file(File(uri!.toFilePath()), fit: fit, errorBuilder: (_, __, ___) => const _PlaceholderImage());
-  return Image.network(value, fit: fit, errorBuilder: (_, __, ___) => const _PlaceholderImage());
+  if (uri?.scheme == 'file') {
+    return Image.file(File(uri!.toFilePath()), fit: fit, errorBuilder: (context, error, stackTrace) => const PlaceholderImage());
+  }
+  return Image.network(value, fit: fit, errorBuilder: (context, error, stackTrace) => const PlaceholderImage());
 }
 
 class PlaceholderImage extends StatelessWidget {
-  const PlaceholderImage();
+  const PlaceholderImage({super.key});
   @override
   Widget build(BuildContext context) => Container(
         color: Colors.grey.shade200,
@@ -84,7 +86,7 @@ class ProductListTile extends StatelessWidget {
             borderRadius: BorderRadius.circular(10),
             child: product.imageUrl != null && product.imageUrl!.isNotEmpty
                 ? _productImage(product.imageUrl!, fit: BoxFit.cover)
-                : const _PlaceholderImage(),
+                : const PlaceholderImage(),
           ),
         ),
         title: Text(product.title, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w700)),
@@ -106,4 +108,3 @@ class ProductListTile extends StatelessWidget {
     );
   }
 }
-
