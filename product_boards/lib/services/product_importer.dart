@@ -67,7 +67,7 @@ class ProductImporter {
       }
     }
 
-    if (httpError != null) throw httpError!;
+    if (httpError != null) throw httpError;
     return data;
   }
 
