@@ -351,7 +351,7 @@ class _HomeScreenState extends State<HomeScreen> {
           if (mounted) _snack('Некорректная резервная копия');
         }
       }),
-      Padding(padding: const EdgeInsets.fromLTRB(16, 0, 16, 20), child: Align(alignment: Alignment.centerLeft, child: Text('Только локальное хранение. Облачной синхронизации нет.', style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant))),
+      Padding(padding: const EdgeInsets.fromLTRB(16, 0, 16, 20), child: Align(alignment: Alignment.centerLeft, child: Text('Только локальное хранение. Облачной синхронизации нет.', style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant)))))),
     ])));
   }
 
@@ -432,7 +432,7 @@ class _ProductEditorState extends State<ProductEditor> {
     TextField(decoration: const InputDecoration(labelText: 'Заметка'), controller: TextEditingController(text: p.note), minLines: 3, maxLines: 6, onChanged: (v) => p = p.copyWith(note: v)),
     const SizedBox(height: 18),
     FilledButton(onPressed: () => Navigator.pop(context, p), child: const Text('Сохранить')),
-  ]));
+  ])));
 }
 
 extension ProductStatusLabel on ProductStatus {
