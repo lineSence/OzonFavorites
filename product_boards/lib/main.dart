@@ -14,6 +14,7 @@ import 'services/backup_service.dart';
 import 'services/price_tracker.dart';
 import 'services/product_preview_resolver.dart';
 import 'widgets/product_card.dart';
+import 'widgets/product_preview_image.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -178,9 +179,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void didUpdateWidget(covariant HomeScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.sharedPayload != null && widget.sharedPayload != oldWidget.sharedPayload) {
-      _consumeIncoming();
-    }
+    if (widget.sharedPayload != null && widget.sharedPayload != oldWidget.sharedPayload) _consumeIncoming();
   }
 
   Future<void> _load() async {
@@ -212,12 +211,8 @@ class _HomeScreenState extends State<HomeScreen> {
       _snack('Нужна ссылка http/https');
       return;
     }
-
     final normalized = _normalize(uri.toString());
-    final duplicate = products.cast<Product?>().firstWhere(
-      (p) => p != null && _normalize(p.url) == normalized,
-      orElse: () => null,
-    );
+    final duplicate = products.cast<Product?>().firstWhere((p) => p != null && _normalize(p.url) == normalized, orElse: () => null);
     if (duplicate != null) {
       await _openProduct(duplicate);
       return;
@@ -229,7 +224,6 @@ class _HomeScreenState extends State<HomeScreen> {
       if (!mounted) return;
       final selection = await _showSavePreview(preview);
       if (selection == null) return;
-
       final product = Product(
         id: widget.repository.newId(),
         url: uri.toString(),
@@ -255,9 +249,9 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<_BoardSelection?> _showSavePreview(ProductPreview preview) async {
-    final lastBoardId = (await SharedPreferences.getInstance()).getString('last_board_id');
-    final initiallySelected = lastBoardId != null && boards.any((b) => b.id == lastBoardId) ? <String>[lastBoardId] : <String>[];
-    var selected = initiallySelected;
+    final prefs = await SharedPreferences.getInstance();
+    final lastBoardId = prefs.getString('last_board_id');
+    var selected = lastBoardId != null && boards.any((b) => b.id == lastBoardId) ? <String>[lastBoardId] : <String>[];
 
     return showModalBottomSheet<_BoardSelection>(
       context: context,
@@ -266,89 +260,76 @@ class _HomeScreenState extends State<HomeScreen> {
       showDragHandle: true,
       builder: (sheetContext) => StatefulBuilder(
         builder: (context, setSheetState) {
-          final hasCommon = selected.isEmpty;
           return Padding(
             padding: EdgeInsets.fromLTRB(16, 8, 16, 16 + MediaQuery.viewInsetsOf(context).bottom),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Сохранить товар', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800)),
-                const SizedBox(height: 14),
-                if (preview.image != null)
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(18),
-                    child: SizedBox(height: 220, width: double.infinity, child: _previewImage(preview)),
-                  )
-                else
-                  Container(
-                    height: 160,
-                    width: double.infinity,
-                    decoration: BoxDecoration(color: Theme.of(context).colorScheme.surfaceContainerHighest, borderRadius: BorderRadius.circular(18)),
-                    child: const Icon(Icons.image_not_supported_outlined, size: 56),
-                  ),
-                const SizedBox(height: 12),
-                Text(preview.title, maxLines: 3, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 18)),
-                if (preview.price != null) ...[
-                  const SizedBox(height: 4),
-                  Text('${preview.price!.toStringAsFixed(0)} ${preview.currency}', style: const TextStyle(fontWeight: FontWeight.w800)),
-                ],
-                const SizedBox(height: 4),
-                Text(preview.siteName, style: Theme.of(context).textTheme.bodySmall),
-                const SizedBox(height: 18),
-                Text('Сохранить в', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800)),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    ChoiceChip(
-                      label: const Text('Общее'),
-                      selected: hasCommon,
-                      onSelected: (_) => setSheetState(() => selected = []),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Сохранить товар', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800)),
+                  const SizedBox(height: 14),
+                  if (preview.image != null)
+                    ClipRRect(borderRadius: BorderRadius.circular(18), child: SizedBox(height: 220, width: double.infinity, child: ProductPreviewImage(preview: preview)))
+                  else
+                    Container(
+                      height: 160,
+                      width: double.infinity,
+                      decoration: BoxDecoration(color: Theme.of(context).colorScheme.surfaceContainerHighest, borderRadius: BorderRadius.circular(18)),
+                      child: const Icon(Icons.image_not_supported_outlined, size: 56),
                     ),
-                    ...boards.map((board) => FilterChip(
-                          label: Text(board.name),
-                          selected: selected.contains(board.id),
-                          onSelected: (value) => setSheetState(() {
-                            if (value) {
-                              selected = [...selected.where((id) => id != board.id), board.id];
-                            } else {
-                              selected = selected.where((id) => id != board.id).toList();
-                            }
-                          }),
-                        )),
+                  const SizedBox(height: 12),
+                  Text(preview.title, maxLines: 3, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 18)),
+                  if (preview.price != null) ...[
+                    const SizedBox(height: 4),
+                    Text('${preview.price!.toStringAsFixed(0)} ${preview.currency}', style: const TextStyle(fontWeight: FontWeight.w800)),
                   ],
-                ),
-                const SizedBox(height: 18),
-                SizedBox(
-                  width: double.infinity,
-                  child: FilledButton.icon(
-                    onPressed: () => Navigator.pop(sheetContext, _BoardSelection(List.unmodifiable(selected))),
-                    icon: const Icon(Icons.save_outlined),
-                    label: const Text('Сохранить товар'),
+                  const SizedBox(height: 4),
+                  Text(preview.siteName, style: Theme.of(context).textTheme.bodySmall),
+                  if (preview.description != null && preview.description!.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Text(preview.description!, maxLines: 3, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.bodySmall),
+                  ],
+                  const SizedBox(height: 18),
+                  Text('Сохранить в', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800)),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      ChoiceChip(
+                        label: const Text('Общее'),
+                        selected: selected.isEmpty,
+                        onSelected: (_) => setSheetState(() => selected = []),
+                      ),
+                      ...boards.map((board) => FilterChip(
+                            label: Text(board.name),
+                            selected: selected.contains(board.id),
+                            onSelected: (value) => setSheetState(() {
+                              if (value) {
+                                selected = [...selected.where((id) => id != board.id), board.id];
+                              } else {
+                                selected = selected.where((id) => id != board.id).toList();
+                              }
+                            }),
+                          )),
+                    ],
                   ),
-                ),
-              ],
+                  const SizedBox(height: 18),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: () => Navigator.pop(sheetContext, _BoardSelection(List.unmodifiable(selected))),
+                      icon: const Icon(Icons.save_outlined),
+                      label: const Text('Сохранить товар'),
+                    ),
+                  ),
+                ],
+              ),
             ),
           );
         },
       ),
-    );
-  }
-
-  Widget _previewImage(ProductPreview preview) {
-    final value = preview.image;
-    if (value == null || value.isEmpty) return const PlaceholderImage();
-    final uri = Uri.tryParse(value);
-    if (uri?.scheme == 'file') {
-      return Image.file(File(uri!.toFilePath()), fit: BoxFit.cover, errorBuilder: (_, __, ___) => const PlaceholderImage());
-    }
-    return Image.network(
-      value,
-      fit: BoxFit.cover,
-      headers: {'User-Agent': 'Mozilla/5.0 (Android) AppleWebKit/537.36 Chrome/131 Mobile Safari/537.36', 'Referer': preview.url.toString()},
-      errorBuilder: (_, __, ___) => const PlaceholderImage(),
     );
   }
 
@@ -393,10 +374,7 @@ class _HomeScreenState extends State<HomeScreen> {
       out = out.where((p) => p.boardIds.contains(selectedBoardFilter));
     }
     final q = query.trim().toLowerCase();
-    if (q.isNotEmpty) {
-      out = out.where((p) => '${p.title} ${p.source} ${p.note} ${_tagNames(p)}'.toLowerCase().contains(q));
-    }
-
+    if (q.isNotEmpty) out = out.where((p) => '${p.title} ${p.source} ${p.note} ${_tagNames(p)}'.toLowerCase().contains(q));
     final list = out.toList();
     switch (sort) {
       case SortMode.newest:
@@ -416,9 +394,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _openProduct(Product product) async {
-    await Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => ProductDetailScreen(product: product, tags: tags, repository: widget.repository),
-    ));
+    await Navigator.of(context).push(MaterialPageRoute(builder: (_) => ProductDetailScreen(product: product, tags: tags, repository: widget.repository)));
     await _load();
   }
 
@@ -432,9 +408,9 @@ class _HomeScreenState extends State<HomeScreen> {
     if (result == null) return;
     await widget.repository.upsertProduct(result);
     if (!mounted) return;
-    final i = products.indexWhere((p) => p.id == result.id);
+    final index = products.indexWhere((p) => p.id == result.id);
     setState(() {
-      if (i >= 0) products[i] = result;
+      if (index >= 0) products[index] = result;
     });
     await _rememberBoardSelection(result.boardIds);
   }
@@ -572,10 +548,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 if (mounted) _snack('Некорректная резервная копия');
               }
             }),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
-              child: Align(alignment: Alignment.centerLeft, child: Text('Только локальное хранение. Облачной синхронизации нет.', style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant))),
-            ),
+            Padding(padding: const EdgeInsets.fromLTRB(16, 0, 16, 20), child: Align(alignment: Alignment.centerLeft, child: Text('Только локальное хранение. Облачной синхронизации нет.', style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant)))),
           ],
         ),
       ),
@@ -616,12 +589,7 @@ class _HomeScreenState extends State<HomeScreen> {
               _drawerItem(icon: Icons.inbox_outlined, title: 'Общее', selected: selectedBoardFilter == _commonBoardFilter, onTap: () { Navigator.pop(context); setState(() { selectedBoardFilter = _commonBoardFilter; selectedSource = null; }); }),
               const Divider(),
               const Padding(padding: EdgeInsets.fromLTRB(12, 8, 12, 4), child: Text('Сайты', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: Colors.grey))),
-              ...sources.map((source) => _drawerItem(
-                    icon: source == 'OZON' ? Icons.shopping_bag_outlined : source == 'Wildberries' ? Icons.storefront_outlined : source == 'Avito' ? Icons.local_offer_outlined : Icons.language_outlined,
-                    title: source,
-                    selected: selectedSource == source,
-                    onTap: () { Navigator.pop(context); setState(() { selectedSource = source; selectedBoardFilter = null; }); },
-                  )),
+              ...sources.map((source) => _drawerItem(icon: source == 'OZON' ? Icons.shopping_bag_outlined : source == 'Wildberries' ? Icons.storefront_outlined : source == 'Avito' ? Icons.local_offer_outlined : Icons.language_outlined, title: source, selected: selectedSource == source, onTap: () { Navigator.pop(context); setState(() { selectedSource = source; selectedBoardFilter = null; }); })),
               const Divider(),
               const Padding(padding: EdgeInsets.fromLTRB(12, 8, 12, 4), child: Text('Доски', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: Colors.grey))),
               ...boards.map((board) => _drawerItem(icon: Icons.dashboard_outlined, title: board.name, selected: selectedBoardFilter == board.id, onTap: () { Navigator.pop(context); setState(() { selectedBoardFilter = board.id; selectedSource = null; }); })),
@@ -652,26 +620,14 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           Expanded(
             child: items.isEmpty
-                ? Center(child: Padding(padding: const EdgeInsets.symmetric(horizontal: 24), child: Text('Добавьте товар через кнопку + или поделитесь ссылкой из магазина.', textAlign: TextAlign.center)))
+                ? const Center(child: Padding(padding: EdgeInsets.symmetric(horizontal: 24), child: Text('Добавьте товар через кнопку + или поделитесь ссылкой из магазина.', textAlign: TextAlign.center)))
                 : layout == LayoutMode.masonry
-                    ? MasonryGridView.count(
-                        padding: const EdgeInsets.all(12),
-                        crossAxisCount: 2,
-                        mainAxisSpacing: 10,
-                        crossAxisSpacing: 10,
-                        itemCount: items.length,
-                        itemBuilder: (_, i) => ProductCard(product: items[i], onTap: () => _openProduct(items[i]), onLongPress: () => _showProductMenu(items[i])),
-                      )
-                    : ListView.separated(
-                        padding: const EdgeInsets.all(12),
-                        itemCount: items.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: 8),
-                        itemBuilder: (_, i) => ProductListTile(product: items[i], onTap: () => _openProduct(items[i]), onLongPress: () => _showProductMenu(items[i])),
-                      ),
+                    ? MasonryGridView.count(padding: const EdgeInsets.all(12), crossAxisCount: 2, mainAxisSpacing: 10, crossAxisSpacing: 10, itemCount: items.length, itemBuilder: (_, i) => ProductCard(product: items[i], onTap: () => _openProduct(items[i]), onLongPress: () => _showProductMenu(items[i])))
+                    : ListView.separated(padding: const EdgeInsets.all(12), itemCount: items.length, separatorBuilder: (_, __) => const SizedBox(height: 8), itemBuilder: (_, i) => ProductListTile(product: items[i], onTap: () => _openProduct(items[i]), onLongPress: () => _showProductMenu(items[i]))),
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(onPressed: () => _showAddDialog(), icon: const Icon(Icons.add), label: const Text('Добавить')),
+      floatingActionButton: FloatingActionButton.extended(onPressed: _showAddDialog, icon: const Icon(Icons.add), label: const Text('Добавить')),
     );
   }
 
@@ -682,10 +638,7 @@ class _HomeScreenState extends State<HomeScreen> {
       builder: (_) => AlertDialog(
         title: const Text('Добавить товар'),
         content: TextField(controller: controller, autofocus: true, keyboardType: TextInputType.url, decoration: const InputDecoration(hintText: 'https://...')),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Отмена')),
-          FilledButton(onPressed: () => Navigator.pop(context, controller.text.trim()), child: const Text('Продолжить')),
-        ],
+        actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Отмена')), FilledButton(onPressed: () => Navigator.pop(context, controller.text.trim()), child: const Text('Продолжить'))],
       ),
     );
     controller.dispose();
