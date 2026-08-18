@@ -326,7 +326,7 @@ class _HomeScreenState extends State<HomeScreen> {
         title: const Text('Тема оформления'),
         children: [
           SimpleDialogOption(onPressed: () => Navigator.pop(context, ThemeMode.system), child: const ListTile(leading: Icon(Icons.brightness_auto_outlined), title: Text('Системная'), subtitle: Text('Следовать настройкам устройства'))),
-          SimpleDialogOption(onPressed: () => Navigator.pop(context, ThemeMode.light), child: const ListTile(leading: Icon(Icons.light_mode_outlined), title: Text('Светлая'))),
+          SimpleDialogOption(onPressed: () => Navigator.pop(context, ThemeMode.light), child: const ListTile(leading: Icon(Icons.light_mode_outlined), title: Text('Светлая')),
           SimpleDialogOption(onPressed: () => Navigator.pop(context, ThemeMode.dark), child: const ListTile(leading: Icon(Icons.dark_mode_outlined), title: Text('Тёмная'))),
         ],
       ),
@@ -406,7 +406,7 @@ class _HomeScreenState extends State<HomeScreen> {
             PopupMenuItem(value: SortMode.priority, child: Text('Приоритет')),
           ], icon: const Icon(Icons.sort)),
         ])),
-        Expanded(child: items.isEmpty ? const Center(child: Text('Добавьте товар через кнопку + или поделитесь ссылкой из магазина.')) : layout == LayoutMode.masonry ? MasonryGridView.count(padding: const EdgeInsets.all(12), crossAxisCount: 2, mainAxisSpacing: 10, crossAxisSpacing: 10, itemCount: items.length, itemBuilder: (_, i) => ProductCard(product: items[i], onTap: () => _editProduct(items[i]), onLongPress: () => _delete(items[i]))) : ListView.separated(padding: const EdgeInsets.all(12), itemCount: items.length, separatorBuilder: (_, __) => const SizedBox(height: 8), itemBuilder: (_, i) => ProductListTile(product: items[i], onTap: () => _editProduct(items[i]), onLongPress: () => _delete(items[i])))),
+        Expanded(child: items.isEmpty ? const Center(child: Text('Добавьте товар через кнопку + или поделитесь ссылкой из магазина.')) : layout == LayoutMode.masonry ? MasonryGridView.count(padding: const EdgeInsets.all(12), crossAxisCount: 2, mainAxisSpacing: 10, crossAxisSpacing: 10, itemCount: items.length, itemBuilder: (_, i) => ProductCard(product: items[i], onTap: () => _editProduct(items[i]), onLongPress: () => _delete(items[i]))) : ListView.separated(padding: const EdgeInsets.all(12), itemCount: items.length, separatorBuilder: (context, index) => const SizedBox(height: 8), itemBuilder: (_, i) => ProductListTile(product: items[i], onTap: () => _editProduct(items[i]), onLongPress: () => _delete(items[i])))),
       ]),
       floatingActionButton: FloatingActionButton.extended(onPressed: () => _showAddDialog(), icon: const Icon(Icons.add), label: const Text('Добавить')),
     );
