@@ -50,15 +50,13 @@ class ProductImporter {
     double? price = _parsePrice(meta('product:price:amount'));
     String? currency = meta('product:price:currency');
 
-    // Ozon frequently embeds the actual product state in data-state blocks.
-    // Prefer these over brittle regexes because they contain the same data
-    // used to render the visible product page.
     final priceStates = document.querySelectorAll('div[id^="state-webPrice-"]');
     for (final node in priceStates) {
       final state = _decodeState(node.attributes['data-state']);
       if (state == null) continue;
-      price ??= _parsePrice('${state['price'] ?? state['currentPrice'] ?? state['salePrice'] ?? ''}');
-      currency ??= _currencyFromPrice('${state['price'] ?? state['currentPrice'] ?? state['salePrice'] ?? ''}');
+      final rawPrice = '${state['price'] ?? state['currentPrice'] ?? state['salePrice'] ?? ''}';
+      price ??= _parsePrice(rawPrice);
+      currency ??= _currencyFromPrice(rawPrice);
       if (price != null) break;
     }
 
@@ -91,28 +89,30 @@ class ProductImporter {
           }
         }
       } catch (_) {
-        // Some pages contain multiple invalid JSON-LD snippets; continue with other sources.
+        // Some pages contain invalid JSON-LD; continue with other sources.
       }
     }
 
-    // Ozon can inline the same state in JSON without the state-* wrapper.
     final raw = response.body;
     if (title == null || image == null || price == null) {
       if (title == null) {
-        final m = RegExp(r'\\?"name\\?"\s*:\s*\\?"([^\\"]{3,500})\\?"').firstMatch(raw);
-        title = _jsonUnescape(m?.group(1));
+        final match = RegExp(r'"name"\s*:\s*"([^"\\]{3,500})"').firstMatch(raw);
+        title = _jsonUnescape(match?.group(1));
       }
       if (image == null) {
-        final m = RegExp(
-          r'\\?"(?:image|images)\\?"\s*:\s*(?:\[\s*)?\\?"(https?[^"\\]+\.(?:jpg|jpeg|png|webp)(?:\?[^"\\]*)?)',
+        final match = RegExp(
+          r'"(?:image|images)"\s*:\s*(?:\[\s*)?"(https?[^"\\]+\.(?:jpg|jpeg|png|webp)(?:\?[^"\\]*)?)',
           caseSensitive: false,
         ).firstMatch(raw);
-        image = m?.group(1);
+        image = match?.group(1);
       }
       if (price == null) {
-        final m = RegExp(r'\\?"(?:price|currentPrice|salePrice)\\?"\s*:\s*\\?"?([0-9][0-9\s.,\u00A0\u202F]*)(?:\s*₽|\\?"|$)', caseSensitive: false).firstMatch(raw);
-        if (m != null) {
-          price = _parsePrice(m.group(1) ?? '');
+        final match = RegExp(
+          r'"(?:price|currentPrice|salePrice)"\s*:\s*"?([0-9][0-9\s.,\u00A0\u202F]*)',
+          caseSensitive: false,
+        ).firstMatch(raw);
+        if (match != null) {
+          price = _parsePrice(match.group(1));
           currency ??= 'RUB';
         }
       }
@@ -134,8 +134,7 @@ class ProductImporter {
       return decoded is Map ? Map<String, dynamic>.from(decoded) : null;
     } catch (_) {
       try {
-        final unescaped = _htmlUnescape(raw);
-        final decoded = jsonDecode(unescaped);
+        final decoded = jsonDecode(_htmlUnescape(raw));
         return decoded is Map ? Map<String, dynamic>.from(decoded) : null;
       } catch (_) {
         return null;
@@ -152,8 +151,7 @@ class ProductImporter {
 
   static Uri _canonicalizeOzon(Uri uri) {
     if (!uri.host.toLowerCase().contains('ozon')) return uri;
-    final path = uri.path;
-    final match = RegExp(r'(?<!\d)(\d{7,})(?!\d)').firstMatch(path);
+    final match = RegExp(r'(?<!\d)(\d{7,})(?!\d)').firstMatch(uri.path);
     if (match == null) return uri;
     return Uri.parse('https://www.ozon.ru/product/${match.group(1)}/');
   }
@@ -207,7 +205,7 @@ class ProductImporter {
 
   static String? _currencyFromPrice(String value) {
     if (value.contains('₽') || value.toLowerCase().contains('rub')) return 'RUB';
-    if (value.contains('$') || value.toLowerCase().contains('usd')) return 'USD';
+    if (value.contains('\$') || value.toLowerCase().contains('usd')) return 'USD';
     if (value.contains('€') || value.toLowerCase().contains('eur')) return 'EUR';
     return null;
   }
