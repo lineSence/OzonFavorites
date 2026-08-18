@@ -1,0 +1,7 @@
+include: package:flutter_lints/flutter.yaml
+
+linter:
+  rules:
+    # Стилевое правило о `const`-конструкторах @immutable-виджетов: код пишется
+    # без жёсткой конст-дисциплины, а правило порождает каскад мелких правок.
+    prefer_const_constructors_in_immutables: false
