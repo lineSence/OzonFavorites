@@ -2,13 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'models/board.dart';
 import 'models/product.dart';
 import 'models/tag.dart';
 import 'repositories/local_repository.dart';
 import 'repositories/product_repository.dart';
-import 'screens/product_detail_screen.dart';
 import 'services/backup_service.dart';
 import 'services/price_tracker.dart';
 import 'services/product_importer.dart';
@@ -122,7 +120,7 @@ class HomeScreen extends StatefulWidget {
   final VoidCallback consumeSharedPayload;
   final SharePayload? sharedPayload;
   final ThemeMode themeMode;
-  final ValueChanged<ThemeMode> onThemeModeChanged;
+  final Future<void> Function(ThemeMode) onThemeModeChanged;
   @override State<HomeScreen> createState() => _HomeScreenState();
 }
 
@@ -328,8 +326,8 @@ class _HomeScreenState extends State<HomeScreen> {
         title: const Text('Тема оформления'),
         children: [
           SimpleDialogOption(onPressed: () => Navigator.pop(context, ThemeMode.system), child: const ListTile(leading: Icon(Icons.brightness_auto_outlined), title: Text('Системная'), subtitle: Text('Следовать настройкам устройства'))),
-          SimpleDialogOption(onPressed: () => Navigator.pop(context, ThemeMode.light), child: const ListTile(leading: Icon(Icons.light_mode_outlined), title: Text('Светлая'))),
-          SimpleDialogOption(onPressed: () => Navigator.pop(context, ThemeMode.dark), child: const ListTile(leading: Icon(Icons.dark_mode_outlined), title: Text('Тёмная'))),
+          SimpleDialogOption(onPressed: () => Navigator.pop(context, ThemeMode.light), child: const ListTile(leading: const Icon(Icons.light_mode_outlined), title: Text('Светлая'))),
+          SimpleDialogOption(onPressed: () => Navigator.pop(context, ThemeMode.dark), child: const ListTile(leading: const Icon(Icons.dark_mode_outlined), title: Text('Тёмная'))),
         ],
       ),
     );
@@ -399,7 +397,7 @@ class _HomeScreenState extends State<HomeScreen> {
             PopupMenuItem(value: SortMode.priority, child: Text('Приоритет')),
           ], icon: const Icon(Icons.sort)),
         ])),
-        Expanded(child: items.isEmpty ? const Center(child: Text('Добавьте товар через кнопку + или поделитесь ссылкой из магазина.')) : layout == LayoutMode.masonry ? MasonryGridView.count(padding: const EdgeInsets.all(12), crossAxisCount: 2, mainAxisSpacing: 10, crossAxisSpacing: 10, itemCount: items.length, itemBuilder: (_, i) => ProductCard(product: items[i], onTap: () => _editProduct(items[i]), onLongPress: () => _delete(items[i])) : ListView.separated(padding: const EdgeInsets.all(12), itemCount: items.length, separatorBuilder: (_, __) => const SizedBox(height: 8), itemBuilder: (_, i) => ProductListTile(product: items[i], onTap: () => _editProduct(items[i]), onLongPress: () => _delete(items[i])))),
+        Expanded(child: items.isEmpty ? const Center(child: Text('Добавьте товар через кнопку + или поделитесь ссылкой из магазина.')) : layout == LayoutMode.masonry ? MasonryGridView.count(padding: const EdgeInsets.all(12), crossAxisCount: 2, mainAxisSpacing: 10, crossAxisSpacing: 10, itemCount: items.length, itemBuilder: (_, i) => ProductCard(product: items[i], onTap: () => _editProduct(items[i]), onLongPress: () => _delete(items[i]))) : ListView.separated(padding: const EdgeInsets.all(12), itemCount: items.length, separatorBuilder: (_, __) => const SizedBox(height: 8), itemBuilder: (_, i) => ProductListTile(product: items[i], onTap: () => _editProduct(items[i]), onLongPress: () => _delete(items[i])))),
       ]),
       floatingActionButton: FloatingActionButton.extended(onPressed: () => _showAddDialog(), icon: const Icon(Icons.add), label: const Text('Добавить')),
     );
@@ -429,10 +427,19 @@ class _ProductEditorState extends State<ProductEditor> {
     const SizedBox(height: 10),
     TextField(decoration: const InputDecoration(labelText: 'Цена'), keyboardType: TextInputType.number, controller: TextEditingController(text: p.price?.toStringAsFixed(0) ?? ''), onChanged: (v) => p = p.copyWith(price: double.tryParse(v.replaceAll(',', '.')))),
     const SizedBox(height: 10),
-    DropdownButtonFormField<ProductStatus>(value: p.status, decoration: const InputDecoration(labelText: 'Статус'), items: ProductStatus.values.map((s) => DropdownMenuItem(value: s, child: Text(s.label))).toList(), onChanged: (v) => setState(() => p = p.copyWith(status: v ?? p.status))),
+    DropdownButtonFormField<ProductStatus>(initialValue: p.status, decoration: const InputDecoration(labelText: 'Статус'), items: ProductStatus.values.map((s) => DropdownMenuItem(value: s, child: Text(s.label))).toList(), onChanged: (v) => setState(() => p = p.copyWith(status: v ?? p.status))),
     const SizedBox(height: 10),
     TextField(decoration: const InputDecoration(labelText: 'Заметка'), controller: TextEditingController(text: p.note), minLines: 3, maxLines: 6, onChanged: (v) => p = p.copyWith(note: v)),
     const SizedBox(height: 18),
     FilledButton(onPressed: () => Navigator.pop(context, p), child: const Text('Сохранить')),
   ]));
+}
+
+extension ProductStatusLabel on ProductStatus {
+  String get label => switch (this) {
+    ProductStatus.wishlist => 'Желаю',
+    ProductStatus.considering => 'Рассматриваю',
+    ProductStatus.purchased => 'Куплено',
+    ProductStatus.archived => 'Архив',
+  };
 }
