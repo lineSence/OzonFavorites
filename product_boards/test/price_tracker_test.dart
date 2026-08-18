@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -28,6 +29,9 @@ void main() {
     </head></html>
   ''';
 
+  http.Response utf8Response(String body, int statusCode) =>
+      http.Response.bytes(utf8.encode(body), statusCode, headers: {'content-type': 'text/html; charset=utf-8'});
+
   test('updatePrice records a lower price and marks priceDrop', () async {
     final dir = await Directory.systemTemp.createTemp('price_tracker_');
     final repo = LocalRepository(factory: databaseFactoryFfi, dbPath: p.join(dir.path, 'test.sqlite'));
@@ -35,7 +39,7 @@ void main() {
     final product = Product(id: 'p1', url: 'https://www.ozon.ru/product/1234567/', source: 'OZON', title: 'Товар', price: 5000, createdAt: DateTime.now());
     await repo.upsertProduct(product);
 
-    final client = MockClient((request) async => http.Response(pageWithPrice(4500), 200));
+    final client = MockClient((request) async => utf8Response(pageWithPrice(4500), 200));
     final tracker = PriceTracker(repository: repo, importer: ProductImporter(client: client));
     final result = await tracker.updatePrice(product);
     expect(result.status, PriceUpdateStatus.updated);
@@ -58,7 +62,7 @@ void main() {
     await repo.upsertProduct(product);
 
     // Та же цена — unchanged.
-    var client = MockClient((request) async => http.Response(pageWithPrice(5000), 200));
+    var client = MockClient((request) async => utf8Response(pageWithPrice(5000), 200));
     var tracker = PriceTracker(repository: repo, importer: ProductImporter(client: client));
     expect((await tracker.updatePrice(product)).status, PriceUpdateStatus.unchanged);
 
