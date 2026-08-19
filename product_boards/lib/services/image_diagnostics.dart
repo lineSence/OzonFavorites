@@ -16,7 +16,7 @@ class ImageDiagnosticEntry {
     if (event.startsWith('FAIL_')) return error ?? event;
     if (event == 'RESPONSE') return 'HTTP ${statusCode ?? '?'} · ${contentType ?? '?'} · ${bytes ?? 0} B';
     if (event == 'SAVED' || event == 'CACHE_HIT') return path ?? event;
-    return [source, url].where((v) => v != null && v!.isNotEmpty).join(' · ');
+    return [source, url].where((v) => v != null && v.isNotEmpty).join(' · ');
   }
 }
 
@@ -59,7 +59,9 @@ class ImageDiagnostics {
   }
 
   static void _notify() {
-    for (final callback in List<void Function()>.from(_callbacks)) callback();
+    for (final callback in List<void Function()>.from(_callbacks)) {
+      callback();
+    }
   }
 
   static void start(String url, {String? referer}) => log('START', {'url': url, 'referer': referer});
