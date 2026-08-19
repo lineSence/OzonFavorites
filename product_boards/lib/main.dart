@@ -628,7 +628,6 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     if (!ready) return const Scaffold(body: Center(child: CircularProgressIndicator()));
     final items = visible;
-    final boardActive = selectedBoardFilter == null ? 'all' : selectedBoardFilter;
     return Scaffold(
       appBar: AppBar(
         titleSpacing: 18,
