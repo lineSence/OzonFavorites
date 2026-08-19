@@ -156,17 +156,21 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                     ],
                   ),
                 const SizedBox(height: 6),
-                Row(
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
                   children: [
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                       decoration: BoxDecoration(color: scheme.surfaceContainerHighest, borderRadius: BorderRadius.circular(999)),
                       child: Text(current.source, style: theme.textTheme.labelMedium?.copyWith(fontWeight: FontWeight.w700)),
                     ),
-                    if (current.quantity > 1) ...[
-                      const SizedBox(width: 8),
-                      Text('×${current.quantity}', style: theme.textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant)),
-                    ],
+                    if (current.quantity > 1)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                        decoration: BoxDecoration(color: scheme.surfaceContainerHighest, borderRadius: BorderRadius.circular(999)),
+                        child: Text('Количество: ${current.quantity}', style: theme.textTheme.labelMedium?.copyWith(color: scheme.onSurfaceVariant, fontWeight: FontWeight.w600)),
+                      ),
                   ],
                 ),
                 const SizedBox(height: 22),
