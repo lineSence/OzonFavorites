@@ -9,6 +9,7 @@ import 'models/product_preview.dart';
 import 'models/tag.dart';
 import 'repositories/local_repository.dart';
 import 'repositories/product_repository.dart';
+import 'screens/image_diagnostics_screen.dart';
 import 'screens/product_detail_screen.dart';
 import 'services/backup_service.dart';
 import 'services/price_tracker.dart';
@@ -26,7 +27,6 @@ Future<void> main() async {
 class ProductBoardsApp extends StatefulWidget {
   const ProductBoardsApp({super.key, required this.repository});
   final ProductRepository repository;
-
   @override
   State<ProductBoardsApp> createState() => _ProductBoardsAppState();
 }
@@ -46,9 +46,7 @@ class _ProductBoardsAppState extends State<ProductBoardsApp> {
       }
     });
     shareChannel.invokeMethod('getInitialSharedData').then((value) {
-      if (value is Map && mounted) {
-        setState(() => sharedPayload = SharePayload.fromMap(Map<Object?, Object?>.from(value)));
-      }
+      if (value is Map && mounted) setState(() => sharedPayload = SharePayload.fromMap(Map<Object?, Object?>.from(value)));
     });
   }
 
@@ -56,13 +54,11 @@ class _ProductBoardsAppState extends State<ProductBoardsApp> {
     final prefs = await SharedPreferences.getInstance();
     final value = prefs.getString('theme_mode');
     if (!mounted) return;
-    setState(() {
-      themeMode = switch (value) {
-        'light' => ThemeMode.light,
-        'dark' => ThemeMode.dark,
-        _ => ThemeMode.system,
-      };
-    });
+    setState(() => themeMode = switch (value) {
+          'light' => ThemeMode.light,
+          'dark' => ThemeMode.dark,
+          _ => ThemeMode.system,
+        });
   }
 
   Future<void> _setThemeMode(ThemeMode mode) async {
@@ -114,7 +110,6 @@ class SharePayload {
   final String? url;
   final String? title;
   final String? imagePath;
-
   factory SharePayload.fromMap(Map<Object?, Object?> map) => SharePayload(
         url: map['url']?.toString(),
         title: map['title']?.toString(),
@@ -124,30 +119,19 @@ class SharePayload {
 
 enum SortMode { newest, oldest, priceUp, priceDown, name, priority }
 enum LayoutMode { masonry, list }
-
 const _commonBoardFilter = '__common__';
-
 class _BoardSelection {
   const _BoardSelection(this.boardIds);
   final List<String> boardIds;
 }
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({
-    super.key,
-    required this.repository,
-    required this.consumeSharedPayload,
-    this.sharedPayload,
-    required this.themeMode,
-    required this.onThemeModeChanged,
-  });
-
+  const HomeScreen({super.key, required this.repository, required this.consumeSharedPayload, this.sharedPayload, required this.themeMode, required this.onThemeModeChanged});
   final ProductRepository repository;
   final VoidCallback consumeSharedPayload;
   final SharePayload? sharedPayload;
   final ThemeMode themeMode;
   final Future<void> Function(ThemeMode) onThemeModeChanged;
-
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
@@ -155,6 +139,8 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   final backupService = BackupService();
   final resolver = ProductPreviewResolver();
+  final searchController = TextEditingController();
+  final searchFocus = FocusNode();
   late final PriceTracker priceTracker;
   List<Product> products = [];
   List<Board> boards = [];
@@ -162,6 +148,7 @@ class _HomeScreenState extends State<HomeScreen> {
   bool ready = false;
   bool importing = false;
   bool refreshingPrices = false;
+  bool searchActive = false;
   String query = '';
   String? selectedBoardFilter;
   String? selectedSource;
@@ -176,6 +163,13 @@ class _HomeScreenState extends State<HomeScreen> {
     _loadFuture = _load();
     WidgetsBinding.instance.addPostFrameCallback((_) => _consumeIncoming());
     WidgetsBinding.instance.addPostFrameCallback((_) => _refreshPrices(showSummary: false));
+  }
+
+  @override
+  void dispose() {
+    searchController.dispose();
+    searchFocus.dispose();
+    super.dispose();
   }
 
   @override
@@ -219,7 +213,6 @@ class _HomeScreenState extends State<HomeScreen> {
       await _openProduct(duplicate);
       return;
     }
-
     setState(() => importing = true);
     try {
       final preview = await resolver.resolve(uri, sharedTitle: sharedTitle, sharedImageUri: sharedImagePath);
@@ -231,7 +224,7 @@ class _HomeScreenState extends State<HomeScreen> {
         url: uri.toString(),
         source: _source(uri),
         title: preview.title,
-        imageUrl: preview.image,
+        imageUrl: preview.imageUrl,
         price: preview.price,
         currency: preview.currency,
         createdAt: DateTime.now(),
@@ -254,7 +247,6 @@ class _HomeScreenState extends State<HomeScreen> {
     final prefs = await SharedPreferences.getInstance();
     final lastBoardId = prefs.getString('last_board_id');
     var selected = lastBoardId != null && boards.any((b) => b.id == lastBoardId) ? <String>[lastBoardId] : <String>[];
-
     return showModalBottomSheet<_BoardSelection>(
       context: context,
       isScrollControlled: true,
@@ -262,75 +254,65 @@ class _HomeScreenState extends State<HomeScreen> {
       showDragHandle: true,
       backgroundColor: Theme.of(context).colorScheme.surface,
       builder: (sheetContext) => StatefulBuilder(
-        builder: (context, setSheetState) {
-          return Padding(
-            padding: EdgeInsets.fromLTRB(16, 8, 16, 16 + MediaQuery.viewInsetsOf(context).bottom),
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(children: [
-                    Expanded(child: Text('Добавить товар', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900))),
-                    IconButton(onPressed: () => Navigator.pop(sheetContext), icon: const Icon(Icons.close_rounded)),
-                  ]),
-                  const SizedBox(height: 10),
-                  if (preview.image != null)
-                    ClipRRect(borderRadius: BorderRadius.circular(22), child: SizedBox(height: 220, width: double.infinity, child: ProductPreviewImage(preview: preview)))
+        builder: (context, setSheetState) => Padding(
+          padding: EdgeInsets.fromLTRB(16, 8, 16, 16 + MediaQuery.viewInsetsOf(context).bottom),
+          child: SingleChildScrollView(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Expanded(child: Text('Добавить товар', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900))),
+                IconButton(onPressed: () => Navigator.pop(sheetContext), icon: const Icon(Icons.close_rounded)),
+              ]),
+              const SizedBox(height: 10),
+              SizedBox(
+                height: 220,
+                width: double.infinity,
+                child: Stack(fit: StackFit.expand, children: [
+                  if (preview.imageUrl != null || preview.localImageUri != null)
+                    ClipRRect(borderRadius: BorderRadius.circular(22), child: ProductPreviewImage(preview: preview))
                   else
                     Container(
-                      height: 160,
-                      width: double.infinity,
                       decoration: BoxDecoration(color: Theme.of(context).colorScheme.surfaceContainerHighest, borderRadius: BorderRadius.circular(22)),
-                      child: const Icon(Icons.image_not_supported_outlined, size: 52),
+                      child: const Center(child: Icon(Icons.image_not_supported_outlined, size: 52)),
                     ),
-                  const SizedBox(height: 14),
-                  Text(preview.title, maxLines: 3, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 18, height: 1.16)),
-                  const SizedBox(height: 5),
-                  Row(children: [
-                    if (preview.price != null) Text('${preview.price!.toStringAsFixed(0)} ${preview.currency}', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
-                    const Spacer(),
-                    Text(preview.siteName, style: Theme.of(context).textTheme.labelMedium?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant)),
-                  ]),
-                  if (preview.description != null && preview.description!.isNotEmpty) ...[
-                    const SizedBox(height: 8),
-                    Text(preview.description!, maxLines: 2, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.bodySmall),
-                  ],
-                  const SizedBox(height: 20),
-                  Text('Сохранить в', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w900)),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      ChoiceChip(label: const Text('Общее'), selected: selected.isEmpty, onSelected: (_) => setSheetState(() => selected = [])),
-                      ...boards.map((board) => FilterChip(
-                            label: Text(board.name),
-                            selected: selected.contains(board.id),
-                            onSelected: (value) => setSheetState(() {
-                              if (value) {
-                                selected = [...selected.where((id) => id != board.id), board.id];
-                              } else {
-                                selected = selected.where((id) => id != board.id).toList();
-                              }
-                            }),
-                          )),
-                    ],
-                  ),
-                  const SizedBox(height: 18),
-                  SizedBox(
-                    width: double.infinity,
-                    child: FilledButton(
-                      onPressed: () => Navigator.pop(sheetContext, _BoardSelection(List.unmodifiable(selected))),
-                      style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(17))),
-                      child: const Text('Сохранить товар'),
+                  Positioned(
+                    right: 8,
+                    top: 8,
+                    child: Material(
+                      color: Colors.black.withValues(alpha: .52),
+                      shape: const CircleBorder(),
+                      child: IconButton(
+                        tooltip: 'Диагностика изображения',
+                        icon: const Icon(Icons.bug_report_outlined, color: Colors.white),
+                        onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ImageDiagnosticsScreen())),
+                      ),
                     ),
                   ),
-                ],
+                ]),
               ),
-            ),
-          );
-        },
+              const SizedBox(height: 14),
+              Text(preview.title, maxLines: 3, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 18, height: 1.16)),
+              const SizedBox(height: 5),
+              Row(children: [
+                if (preview.price != null) Text('${preview.price!.toStringAsFixed(0)} ${preview.currency}', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
+                const Spacer(),
+                Text(preview.siteName, style: Theme.of(context).textTheme.labelMedium?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant)),
+              ]),
+              if (preview.description != null && preview.description!.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Text(preview.description!, maxLines: 2, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.bodySmall),
+              ],
+              const SizedBox(height: 20),
+              Text('Сохранить в', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w900)),
+              const SizedBox(height: 8),
+              Wrap(spacing: 8, runSpacing: 8, children: [
+                ChoiceChip(label: const Text('Общее'), selected: selected.isEmpty, onSelected: (_) => setSheetState(() => selected = [])),
+                ...boards.map((board) => FilterChip(label: Text(board.name), selected: selected.contains(board.id), onSelected: (value) => setSheetState(() => selected = value ? [...selected.where((id) => id != board.id), board.id] : selected.where((id) => id != board.id).toList()))),
+              ]),
+              const SizedBox(height: 18),
+              SizedBox(width: double.infinity, child: FilledButton(onPressed: () => Navigator.pop(sheetContext, _BoardSelection(List.unmodifiable(selected))), style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(17))), child: const Text('Сохранить товар'))),
+            ]),
+          ),
+        ),
       ),
     );
   }
@@ -379,18 +361,12 @@ class _HomeScreenState extends State<HomeScreen> {
     if (q.isNotEmpty) out = out.where((p) => '${p.title} ${p.source} ${p.note} ${_tagNames(p)}'.toLowerCase().contains(q));
     final list = out.toList();
     switch (sort) {
-      case SortMode.newest:
-        list.sort((a, b) => b.createdAt.compareTo(a.createdAt));
-      case SortMode.oldest:
-        list.sort((a, b) => a.createdAt.compareTo(b.createdAt));
-      case SortMode.priceUp:
-        list.sort((a, b) => (a.price ?? double.infinity).compareTo(b.price ?? double.infinity));
-      case SortMode.priceDown:
-        list.sort((a, b) => (b.price ?? -1).compareTo(a.price ?? -1));
-      case SortMode.name:
-        list.sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
-      case SortMode.priority:
-        list.sort((a, b) => b.priority.compareTo(a.priority));
+      case SortMode.newest: list.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      case SortMode.oldest: list.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+      case SortMode.priceUp: list.sort((a, b) => (a.price ?? double.infinity).compareTo(b.price ?? double.infinity));
+      case SortMode.priceDown: list.sort((a, b) => (b.price ?? -1).compareTo(a.price ?? -1));
+      case SortMode.name: list.sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
+      case SortMode.priority: list.sort((a, b) => b.priority.compareTo(a.priority));
     }
     return list;
   }
@@ -441,15 +417,12 @@ class _HomeScreenState extends State<HomeScreen> {
       ])),
     );
     switch (choice) {
-      case 'edit':
-        await _editProduct(product);
+      case 'edit': await _editProduct(product);
       case 'open':
         final uri = Uri.tryParse(product.url);
         if (uri != null) await launchUrl(uri, mode: LaunchMode.externalApplication);
-      case 'move':
-        await _moveProduct(product);
-      case 'delete':
-        await _deleteProduct(product);
+      case 'move': await _moveProduct(product);
+      case 'delete': await _deleteProduct(product);
     }
   }
 
@@ -477,12 +450,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _editProduct(Product product) async {
-    final updated = await showModalBottomSheet<Product>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (_) => ProductEditor(product: product, boards: boards, tags: tags, repository: widget.repository),
-    );
+    final updated = await showModalBottomSheet<Product>(context: context, isScrollControlled: true, showDragHandle: true, builder: (_) => ProductEditor(product: product, boards: boards, tags: tags, repository: widget.repository));
     if (updated == null) return;
     await widget.repository.upsertProduct(updated);
     if (mounted) setState(() => products = products.map((p) => p.id == updated.id ? updated : p).toList());
@@ -583,6 +551,7 @@ class _HomeScreenState extends State<HomeScreen> {
           children: [
             const ListTile(title: Text('Настройки', style: TextStyle(fontWeight: FontWeight.w800))),
             ListTile(leading: const Icon(Icons.palette_outlined), title: const Text('Тема оформления'), trailing: Text(_themeLabel()), onTap: () async { Navigator.pop(context); await _chooseTheme(); }),
+            ListTile(leading: const Icon(Icons.bug_report_outlined), title: const Text('Диагностика изображений'), onTap: () async { Navigator.pop(context); await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ImageDiagnosticsScreen())); }),
             ListTile(leading: const Icon(Icons.upload_outlined), title: const Text('Поделиться резервной копией'), onTap: () async { Navigator.pop(context); await backupService.shareJson(await widget.repository.exportData()); }),
             ListTile(leading: const Icon(Icons.download_outlined), title: const Text('Восстановить из буфера обмена'), onTap: () async {
               Navigator.pop(context);
@@ -603,11 +572,29 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  void _activateSearch() {
+    setState(() {
+      searchActive = true;
+      searchController.text = query;
+      searchController.selection = TextSelection.fromPosition(TextPosition(offset: searchController.text.length));
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) searchFocus.requestFocus();
+    });
+  }
+
+  void _closeSearch() {
+    setState(() {
+      searchActive = false;
+      query = searchController.text;
+    });
+    searchFocus.unfocus();
+  }
+
   void _snack(String message) => ScaffoldMessenger.of(context)..hideCurrentSnackBar()..showSnackBar(SnackBar(content: Text(message)));
 
   Widget _boardChip(String title, String? id, {bool common = false}) {
-    final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
+    final scheme = Theme.of(context).colorScheme;
     final selected = common ? selectedBoardFilter == _commonBoardFilter : selectedBoardFilter == id;
     return InkWell(
       borderRadius: BorderRadius.circular(999),
@@ -630,35 +617,43 @@ class _HomeScreenState extends State<HomeScreen> {
     final items = visible;
     return Scaffold(
       appBar: AppBar(
-        titleSpacing: 18,
-        title: const Text('Pinzon', style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: -.4)),
-        actions: [
-          IconButton(tooltip: 'Поиск', onPressed: () => _showSearchField(), icon: const Icon(Icons.search_rounded)),
-          PopupMenuButton<String>(
-            icon: const Icon(Icons.more_horiz_rounded),
-            itemBuilder: (_) => const [
-              PopupMenuItem(value: 'sort', child: Text('Сортировка')),
-              PopupMenuItem(value: 'source', child: Text('Магазин')),
-              PopupMenuItem(value: 'layout', child: Text('Вид списка')),
-              PopupMenuItem(value: 'refresh', child: Text('Обновить цены')),
-              PopupMenuItem(value: 'settings', child: Text('Настройки')),
-            ],
-            onSelected: (value) {
-              switch (value) {
-                case 'sort':
-                  _showSortMenu();
-                case 'source':
-                  _showSourceMenu();
-                case 'layout':
-                  setState(() => layout = layout == LayoutMode.masonry ? LayoutMode.list : LayoutMode.masonry);
-                case 'refresh':
-                  if (!refreshingPrices) _refreshPrices(showSummary: true);
-                case 'settings':
-                  _settings();
-              }
-            },
-          ),
-        ],
+        titleSpacing: 12,
+        leading: searchActive ? IconButton(tooltip: 'Закрыть поиск', onPressed: _closeSearch, icon: const Icon(Icons.arrow_back_rounded)) : null,
+        title: searchActive
+            ? TextField(
+                controller: searchController,
+                focusNode: searchFocus,
+                autofocus: true,
+                onChanged: (value) => setState(() => query = value),
+                decoration: InputDecoration(hintText: 'Найти товар', border: InputBorder.none, suffixIcon: query.isEmpty ? null : IconButton(onPressed: () { searchController.clear(); setState(() => query = ''); }, icon: const Icon(Icons.close_rounded))),
+              )
+            : const Text('Pinzon', style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: -.4)),
+        actions: searchActive
+            ? const []
+            : [
+                IconButton(tooltip: 'Поиск', onPressed: _activateSearch, icon: const Icon(Icons.search_rounded)),
+                PopupMenuButton<String>(
+                  icon: const Icon(Icons.more_horiz_rounded),
+                  itemBuilder: (_) => const [
+                    PopupMenuItem(value: 'sort', child: Text('Сортировка')),
+                    PopupMenuItem(value: 'source', child: Text('Магазин')),
+                    PopupMenuItem(value: 'layout', child: Text('Вид списка')),
+                    PopupMenuItem(value: 'refresh', child: Text('Обновить цены')),
+                    PopupMenuItem(value: 'diagnostics', child: Text('Диагностика изображений')),
+                    PopupMenuItem(value: 'settings', child: Text('Настройки')),
+                  ],
+                  onSelected: (value) {
+                    switch (value) {
+                      case 'sort': _showSortMenu();
+                      case 'source': _showSourceMenu();
+                      case 'layout': setState(() => layout = layout == LayoutMode.masonry ? LayoutMode.list : LayoutMode.masonry);
+                      case 'refresh': if (!refreshingPrices) _refreshPrices(showSummary: true);
+                      case 'diagnostics': Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ImageDiagnosticsScreen()));
+                      case 'settings': _settings();
+                    }
+                  },
+                ),
+              ],
       ),
       body: Column(
         children: [
@@ -672,10 +667,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 const SizedBox(width: 7),
                 _boardChip('Общее', _commonBoardFilter, common: true),
                 ...boards.map((board) => Padding(padding: const EdgeInsets.only(left: 7), child: _boardChip(board.name, board.id))),
-                Padding(
-                  padding: const EdgeInsets.only(left: 7),
-                  child: ActionChip(label: const Text('＋ Доска'), onPressed: _createBoard),
-                ),
+                Padding(padding: const EdgeInsets.only(left: 7), child: ActionChip(label: const Text('＋ Доска'), onPressed: _createBoard)),
               ],
             ),
           ),
@@ -693,24 +685,6 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Future<void> _showSearchField() async {
-    final controller = TextEditingController(text: query);
-    await showModalBottomSheet(
-      context: context,
-      showDragHandle: true,
-      builder: (_) => Padding(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-        child: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(prefixIcon: Icon(Icons.search_rounded), hintText: 'Найти товар'),
-          onChanged: (value) => setState(() => query = value),
-        ),
-      ),
-    );
-    controller.dispose();
-  }
-
   Future<void> _showAddDialog() async {
     final controller = TextEditingController();
     final url = await showModalBottomSheet<String>(
@@ -719,17 +693,13 @@ class _HomeScreenState extends State<HomeScreen> {
       isScrollControlled: true,
       builder: (sheetContext) => Padding(
         padding: EdgeInsets.fromLTRB(16, 8, 16, 18 + MediaQuery.viewInsetsOf(sheetContext).bottom),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('Добавить товар', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 22)),
-            const SizedBox(height: 12),
-            TextField(controller: controller, autofocus: true, keyboardType: TextInputType.url, decoration: const InputDecoration(hintText: 'Вставьте ссылку на товар')),
-            const SizedBox(height: 14),
-            SizedBox(width: double.infinity, child: FilledButton(onPressed: () => Navigator.pop(sheetContext, controller.text.trim()), child: const Text('Продолжить'))),
-          ],
-        ),
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('Добавить товар', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 22)),
+          const SizedBox(height: 12),
+          TextField(controller: controller, autofocus: true, keyboardType: TextInputType.url, decoration: const InputDecoration(hintText: 'Вставьте ссылку на товар')),
+          const SizedBox(height: 14),
+          SizedBox(width: double.infinity, child: FilledButton(onPressed: () => Navigator.pop(sheetContext, controller.text.trim()), child: const Text('Продолжить'))),
+        ]),
       ),
     );
     controller.dispose();
@@ -743,7 +713,6 @@ class ProductEditor extends StatefulWidget {
   final List<Board> boards;
   final List<Tag> tags;
   final ProductRepository repository;
-
   @override
   State<ProductEditor> createState() => _ProductEditorState();
 }
@@ -751,14 +720,12 @@ class ProductEditor extends StatefulWidget {
 class _ProductEditorState extends State<ProductEditor> {
   late Product p;
   late List<String> selectedBoardIds;
-
   @override
   void initState() {
     super.initState();
     p = widget.product;
     selectedBoardIds = [...widget.product.boardIds];
   }
-
   @override
   Widget build(BuildContext context) => DraggableScrollableSheet(
         expand: false,
@@ -778,24 +745,10 @@ class _ProductEditorState extends State<ProductEditor> {
               const SizedBox(height: 14),
               const Text('Доски', style: TextStyle(fontWeight: FontWeight.w800)),
               const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  FilterChip(label: const Text('Общее'), selected: selectedBoardIds.isEmpty, onSelected: (_) => setState(() => selectedBoardIds = [])),
-                  ...widget.boards.map((board) => FilterChip(
-                        label: Text(board.name),
-                        selected: selectedBoardIds.contains(board.id),
-                        onSelected: (value) => setState(() {
-                          if (value) {
-                            selectedBoardIds = [...selectedBoardIds.where((id) => id != board.id), board.id];
-                          } else {
-                            selectedBoardIds = selectedBoardIds.where((id) => id != board.id).toList();
-                          }
-                        }),
-                      )),
-                ],
-              ),
+              Wrap(spacing: 8, runSpacing: 8, children: [
+                FilterChip(label: const Text('Общее'), selected: selectedBoardIds.isEmpty, onSelected: (_) => setState(() => selectedBoardIds = [])),
+                ...widget.boards.map((board) => FilterChip(label: Text(board.name), selected: selectedBoardIds.contains(board.id), onSelected: (value) => setState(() => selectedBoardIds = value ? [...selectedBoardIds.where((id) => id != board.id), board.id] : selectedBoardIds.where((id) => id != board.id).toList()))),
+              ]),
               const SizedBox(height: 14),
               TextField(decoration: const InputDecoration(labelText: 'Заметка'), maxLines: 4, controller: TextEditingController(text: p.note), onChanged: (v) => p = p.copyWith(note: v)),
               const SizedBox(height: 14),
