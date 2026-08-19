@@ -29,7 +29,7 @@ class _ImageDiagnosticsScreenState extends State<ImageDiagnosticsScreen> {
   Widget build(BuildContext context) {
     final entries = ImageDiagnostics.entries;
     final lastResult = entries.cast<ImageDiagnosticEntry?>().firstWhere(
-      (entry) => entry != null && (entry.event == 'IMPORT_RESULT' || entry.event == 'PREVIEW_RESULT'),
+      (entry) => entry != null && entry.event == 'IMPORT_RESULT',
       orElse: () => null,
     );
     return Scaffold(
@@ -38,7 +38,7 @@ class _ImageDiagnosticsScreenState extends State<ImageDiagnosticsScreen> {
         actions: [
           IconButton(
             tooltip: 'Очистить',
-            onPressed: entries.isEmpty ? null : () => ImageDiagnostics.clear(),
+            onPressed: entries.isEmpty ? null : ImageDiagnostics.clear,
             icon: const Icon(Icons.delete_sweep_outlined),
           ),
         ],
@@ -143,8 +143,4 @@ class _ImageDiagnosticsScreenState extends State<ImageDiagnosticsScreen> {
     if (event == 'SAVED') return Colors.green;
     return Theme.of(context).colorScheme.primary;
   }
-}
-
-extension on ImageDiagnosticEntry {
-  String? dataValue(String key) => null;
 }
