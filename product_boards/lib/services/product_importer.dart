@@ -4,6 +4,8 @@ import 'package:flutter/services.dart';
 import 'package:html/parser.dart' as html_parser;
 import 'package:http/http.dart' as http;
 
+import 'image_diagnostics.dart';
+
 class ImportedProductData {
   const ImportedProductData({this.title, this.imageUrl, this.price, this.currency, this.description});
   final String? title;
@@ -13,12 +15,29 @@ class ImportedProductData {
   final String? description;
 
   ImportedProductData merge(ImportedProductData other) => ImportedProductData(
-        title: other.title ?? title,
-        imageUrl: other.imageUrl ?? imageUrl,
-        price: other.price ?? price,
-        currency: other.currency ?? currency,
-        description: other.description ?? description,
+        title: _selectTitle(title, other.title),
+        imageUrl: imageUrl ?? other.imageUrl,
+        price: price ?? other.price,
+        currency: currency ?? other.currency,
+        description: description ?? other.description,
       );
+
+  static String? _selectTitle(String? first, String? second) {
+    if (first == null || first.trim().isEmpty) return second;
+    if (second == null || second.trim().isEmpty) return first;
+    final firstScore = _titleScore(first);
+    final secondScore = _titleScore(second);
+    return secondScore > firstScore ? second : first;
+  }
+
+  static int _titleScore(String value) {
+    var score = value.trim().length.clamp(0, 500);
+    if (RegExp(r'[А-Яа-яЁё]').hasMatch(value)) score += 1000;
+    if (RegExp(r'[A-Za-z]').hasMatch(value)) score += 10;
+    if (value.contains(' - ')) score += 5;
+    if (value.toLowerCase().contains('avito')) score -= 100;
+    return score;
+  }
 }
 
 class ProductImporter {
@@ -35,17 +54,26 @@ class ProductImporter {
   final bool _enableBrowserFallback;
 
   Future<ImportedProductData> fetch(Uri uri) async {
+    ImageDiagnostics.start(uri.toString(), referer: uri.toString());
     ImportedProductData data = const ImportedProductData();
     Object? httpError;
     try {
       data = await _fetchHttp(uri);
-    } catch (error) {
+      ImageDiagnostics.log('HTTP_RESULT', {
+        'url': uri.toString(),
+        'title': data.title,
+        'price': data.price,
+        'image': data.imageUrl,
+      });
+    } catch (error, stackTrace) {
       httpError = error;
+      ImageDiagnostics.failure('IMPORT_HTTP', error, url: uri.toString(), stackTrace: stackTrace);
     }
 
     if (_enableBrowserFallback && _needsBrowserFallback(uri) &&
         (httpError != null || data.price == null || data.imageUrl == null || data.title == null)) {
       try {
+        ImageDiagnostics.log('WEBVIEW_START', {'url': uri.toString()});
         final result = await _browserChannel.invokeMethod<dynamic>('resolveProduct', {'url': uri.toString()});
         if (result is Map) {
           final browserData = ImportedProductData(
@@ -55,19 +83,33 @@ class ProductImporter {
             currency: _nullableString(result['currency']),
             description: _nullableString(result['description']),
           );
+          ImageDiagnostics.log('WEBVIEW_RESULT', {
+            'url': uri.toString(),
+            'title': browserData.title,
+            'price': browserData.price,
+            'image': browserData.imageUrl,
+          });
           data = data.merge(browserData);
           if (browserData.title != null || browserData.imageUrl != null || browserData.price != null || browserData.description != null) {
             httpError = null;
           }
         }
-      } on MissingPluginException {
-        // Browser fallback is Android-specific.
-      } on PlatformException {
-        // A browser failure must never prevent basic import from working.
+      } on MissingPluginException catch (error, stackTrace) {
+        ImageDiagnostics.failure('WEBVIEW_PLUGIN', error, url: uri.toString(), stackTrace: stackTrace);
+      } on PlatformException catch (error, stackTrace) {
+        ImageDiagnostics.failure('WEBVIEW', error, url: uri.toString(), stackTrace: stackTrace);
+      } catch (error, stackTrace) {
+        ImageDiagnostics.failure('WEBVIEW_UNKNOWN', error, url: uri.toString(), stackTrace: stackTrace);
       }
     }
 
-    if (httpError != null) throw httpError;
+    ImageDiagnostics.log('IMPORT_RESULT', {
+      'url': uri.toString(),
+      'title': data.title,
+      'price': data.price,
+      'image': data.imageUrl,
+    });
+    if (httpError != null && data.title == null && data.price == null && data.imageUrl == null) throw httpError;
     return data;
   }
 
@@ -88,33 +130,26 @@ class ProductImporter {
         document.querySelector('meta[property="$property"]')?.attributes['content'] ??
         document.querySelector('meta[name="$property"]')?.attributes['content'];
 
-    String? title = meta('og:title') ??
-        document.querySelector('meta[name="twitter:title"]')?.attributes['content'] ??
-        document.querySelector('[itemprop="name"]')?.attributes['content'] ??
-        document.querySelector('[data-widget="webProductHeading"] h1')?.text.trim() ??
-        document.querySelector('[data-widget="webProductHeading"]')?.text.trim() ??
-        document.querySelector('h1')?.text.trim() ??
-        document.querySelector('title')?.text.trim();
+    String? title = _clean(meta('og:title')) ??
+        _clean(document.querySelector('meta[name="twitter:title"]')?.attributes['content']) ??
+        _clean(document.querySelector('[itemprop="name"]')?.attributes['content']) ??
+        _clean(document.querySelector('[data-widget="webProductHeading"] h1')?.text) ??
+        _clean(document.querySelector('[data-widget="webProductHeading"]')?.text) ??
+        _clean(document.querySelector('h1')?.text) ??
+        _clean(document.querySelector('title')?.text);
+
     String? image = _usableImage(meta('og:image')) ?? _usableImage(meta('twitter:image'));
-    String? description = meta('og:description') ?? meta('twitter:description');
+    String? description = _clean(meta('og:description') ?? meta('twitter:description'));
     double? price = _parsePrice(meta('product:price:amount'));
     String? currency = meta('product:price:currency');
 
     for (final node in document.querySelectorAll('div[id^="state-webPrice-"]')) {
       final state = _decodeState(node.attributes['data-state']);
       if (state == null) continue;
-      final rawPrice = '${state['price'] ?? state['currentPrice'] ?? state['salePrice'] ?? state['finalPrice'] ?? ''}';
+      final rawPrice = '${state['price'] ?? state['currentPrice'] ?? state['salePrice'] ?? state['finalPrice'] ?? state['discountPrice'] ?? ''}';
       price ??= _parsePrice(rawPrice);
       currency ??= _currencyFromPrice(rawPrice);
       if (price != null) break;
-    }
-
-    for (final node in document.querySelectorAll('div[id^="state-webGallery-"]')) {
-      final state = _decodeState(node.attributes['data-state']);
-      if (state == null) continue;
-      final candidate = _firstUsableImage(state['images']) ?? _firstUsableImage(state['items']);
-      if (candidate != null) image = candidate;
-      if (image != null) break;
     }
 
     for (final node in document.querySelectorAll('script[type="application/ld+json"]')) {
@@ -126,18 +161,18 @@ class ProductImporter {
           final map = Map<String, dynamic>.from(candidate);
           final type = '${map['@type'] ?? ''}'.toLowerCase();
           if (type.contains('product') || map.containsKey('name') || map.containsKey('image')) {
-            title = _string(map['name']) ?? title;
+            title = ImportedProductData._selectTitle(title, _string(map['name']));
             final candidateImage = _firstUsableImage(map['image']);
-            if (candidateImage != null) image = candidateImage;
+            if (candidateImage != null && !_isGenericImage(candidateImage, uri)) image = candidateImage;
             description ??= _string(map['description']);
             final offers = map['offers'];
             if (offers is Map) {
-              price ??= _parsePrice('${offers['price'] ?? offers['lowPrice'] ?? offers['highPrice'] ?? ''}');
+              price ??= _parsePrice('${offers['price'] ?? offers['lowPrice'] ?? offers['highPrice'] ?? offers['currentPrice'] ?? ''}');
               currency ??= _string(offers['priceCurrency']);
             } else if (offers is List) {
               for (final offer in offers) {
                 if (offer is Map) {
-                  price ??= _parsePrice('${offer['price'] ?? offer['lowPrice'] ?? offer['highPrice'] ?? ''}');
+                  price ??= _parsePrice('${offer['price'] ?? offer['lowPrice'] ?? offer['highPrice'] ?? offer['currentPrice'] ?? ''}');
                   currency ??= _string(offer['priceCurrency']);
                   if (price != null) break;
                 }
@@ -177,6 +212,9 @@ class ProductImporter {
       if (title == null) {
         final match = RegExp(r'"name"\s*:\s*"([^"\\]{3,500})"').firstMatch(inline);
         title = _jsonUnescape(match?.group(1));
+      } else {
+        final match = RegExp(r'"name"\s*:\s*"([^"\\]{3,500})"').firstMatch(inline);
+        title = ImportedProductData._selectTitle(title, _jsonUnescape(match?.group(1)));
       }
       if (image == null || _isGenericImage(image, uri)) {
         final matches = RegExp(
@@ -193,7 +231,7 @@ class ProductImporter {
       }
       if (price == null) {
         final match = RegExp(
-          r'"(?:price|currentPrice|salePrice|finalPrice)"\s*:\s*"?([0-9][0-9\s.,\u00A0\u202F]*)',
+          r'"(?:price|currentPrice|salePrice|finalPrice|discountPrice|oldPrice)"\s*:\s*"?([0-9][0-9\s.,\u00A0\u202F]*)',
           caseSensitive: false,
         ).firstMatch(inline);
         if (match != null) {
@@ -204,6 +242,12 @@ class ProductImporter {
       if (title != null && image != null && price != null) break;
     }
 
+    if (price == null) {
+      price = _parseVisiblePrice(document, uri);
+      if (price != null) currency ??= 'RUB';
+    }
+
+    ImageDiagnostics.candidate('http', _absoluteImage(uri, image));
     return ImportedProductData(
       title: _clean(title),
       imageUrl: _absoluteImage(uri, image),
@@ -213,9 +257,29 @@ class ProductImporter {
     );
   }
 
+  static double? _parseVisiblePrice(dynamic document, Uri uri) {
+    final candidates = <String>[];
+    for (final selector in ['[itemprop="price"]', '[class*="price"]', '[data-testid*="price"]']) {
+      for (final element in document.querySelectorAll(selector)) {
+        final text = _clean(element.text);
+        if (text != null && text.length <= 100) candidates.add(text);
+      }
+      if (candidates.isNotEmpty) break;
+    }
+    for (final text in candidates) {
+      final value = _parsePrice(text);
+      if (value != null && value >= 1) return value;
+    }
+    return null;
+  }
+
   static bool _needsBrowserFallback(Uri uri) {
     final host = uri.host.toLowerCase();
-    return host.contains('ozon') || host.contains('wildberries') || host.contains('avito');
+    return host.contains('ozon') ||
+        host.contains('wildberries') ||
+        host.contains('avito') ||
+        host.contains('market.yandex') ||
+        host.contains('yandex.ru');
   }
 
   static String? _nullableString(dynamic value) {
@@ -273,8 +337,7 @@ class ProductImporter {
   static String? _string(dynamic value) => value?.toString().trim().isEmpty == true ? null : value?.toString().trim();
   static String? _clean(String? value) => value?.replaceAll(RegExp(r'\s+'), ' ').trim();
 
-  static String? _usableImage(String? value) =>
-      value == null || value.trim().isEmpty ? null : value.trim();
+  static String? _usableImage(String? value) => value == null || value.trim().isEmpty ? null : value.trim();
 
   static String? _firstUsableImage(dynamic value) {
     if (value is String && value.isNotEmpty) return _usableImage(value);
