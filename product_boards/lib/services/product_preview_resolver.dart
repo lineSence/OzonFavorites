@@ -1,5 +1,6 @@
 import '../models/product_preview.dart';
 import 'image_cache_service.dart';
+import 'image_diagnostics.dart';
 import 'product_importer.dart';
 
 class ProductPreviewResolver {
@@ -18,19 +19,26 @@ class ProductPreviewResolver {
     ImportedProductData data = const ImportedProductData();
     try {
       data = await _importer.fetch(uri);
-    } catch (_) {
-      // A preview can still be created from the shared title/image or URL.
+    } catch (error, stackTrace) {
+      ImageDiagnostics.failure('RESOLVER', error, url: uri.toString(), stackTrace: stackTrace);
     }
 
-    final title = data.title?.trim().isNotEmpty == true
-        ? data.title!.trim()
-        : (sharedTitle?.trim().isNotEmpty == true ? sharedTitle!.trim() : _fallbackTitle(uri));
+    final title = _chooseTitle(data.title, sharedTitle, uri);
 
     String? localImage;
     if (sharedImageUri != null && sharedImageUri.isNotEmpty) {
       localImage = await _imageCache.cacheLocalUri(sharedImageUri);
+      ImageDiagnostics.log('SHARED_IMAGE', {'url': sharedImageUri, 'path': localImage});
     }
     localImage ??= await _tryCache(data.imageUrl, uri);
+
+    ImageDiagnostics.log('PREVIEW_RESULT', {
+      'url': uri.toString(),
+      'title': title,
+      'price': data.price,
+      'image': data.imageUrl,
+      'localImage': localImage,
+    });
 
     return ProductPreview(
       url: uri,
@@ -45,8 +53,25 @@ class ProductPreviewResolver {
   }
 
   Future<String?> _tryCache(String? imageUrl, Uri referer) async {
-    if (imageUrl == null || imageUrl.isEmpty) return null;
+    if (imageUrl == null || imageUrl.isEmpty) {
+      ImageDiagnostics.log('IMAGE_URL_MISSING', {'url': referer.toString()});
+      return null;
+    }
     return _imageCache.cacheUrl(imageUrl, referer: referer);
+  }
+
+  static String _chooseTitle(String? imported, String? sharedTitle, Uri uri) {
+    final candidates = <String>[if (imported?.trim().isNotEmpty == true) imported!.trim(), if (sharedTitle?.trim().isNotEmpty == true) sharedTitle!.trim()];
+    if (candidates.isEmpty) return _fallbackTitle(uri);
+    candidates.sort((a, b) => _scoreTitle(b).compareTo(_scoreTitle(a)));
+    return candidates.first;
+  }
+
+  static int _scoreTitle(String value) {
+    var score = value.length.clamp(0, 500);
+    if (RegExp(r'[А-Яа-яЁё]').hasMatch(value)) score += 1000;
+    if (value.toLowerCase().contains('avito')) score -= 100;
+    return score;
   }
 
   static String _siteName(Uri uri) {
