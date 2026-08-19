@@ -400,132 +400,6 @@ class _HomeScreenState extends State<HomeScreen> {
     await _load();
   }
 
-  Future<void> _editProduct(Product product) async {
-    final result = await showModalBottomSheet<Product>(
-      context: context,
-      isScrollControlled: true,
-      useSafeArea: true,
-      showDragHandle: true,
-      builder: (_) => ProductEditor(product: product, boards: boards, tags: tags, repository: widget.repository),
-    );
-    if (result == null) return;
-    await widget.repository.upsertProduct(result);
-    if (!mounted) return;
-    final index = products.indexWhere((p) => p.id == result.id);
-    setState(() {
-      if (index >= 0) products[index] = result;
-    });
-    await _rememberBoardSelection(result.boardIds);
-  }
-
-  Future<void> _showProductMenu(Product product) async {
-    final choice = await showModalBottomSheet<String>(
-      context: context,
-      showDragHandle: true,
-      backgroundColor: Theme.of(context).colorScheme.surface,
-      builder: (context) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(8, 4, 8, 12),
-          child: Wrap(
-            children: [
-              ListTile(shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)), leading: const Icon(Icons.edit_outlined), title: const Text('Изменить'), onTap: () => Navigator.pop(context, 'edit')),
-              ListTile(shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)), leading: const Icon(Icons.open_in_new_rounded), title: const Text('Открыть на сайте'), onTap: () => Navigator.pop(context, 'open')),
-              ListTile(shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)), leading: const Icon(Icons.drive_file_move_outline), title: const Text('Переместить в доску'), onTap: () => Navigator.pop(context, 'move')),
-              ListTile(shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)), leading: const Icon(Icons.delete_outline), title: const Text('Удалить'), onTap: () => Navigator.pop(context, 'delete')),
-            ],
-          ),
-        ),
-      ),
-    );
-    switch (choice) {
-      case 'edit':
-        await _editProduct(product);
-      case 'open':
-        final uri = Uri.tryParse(product.url);
-        if (uri != null) await launchUrl(uri, mode: LaunchMode.externalApplication);
-      case 'move':
-        await _moveProduct(product);
-      case 'delete':
-        await _deleteProduct(product);
-    }
-  }
-
-  Future<void> _moveProduct(Product product) async {
-    var selected = [...product.boardIds];
-    final result = await showModalBottomSheet<List<String>>(
-      context: context,
-      showDragHandle: true,
-      builder: (sheetContext) => StatefulBuilder(
-        builder: (context, setSheetState) => SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
-            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('Переместить в', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900)),
-              const SizedBox(height: 12),
-              Wrap(spacing: 8, runSpacing: 8, children: [
-                ChoiceChip(label: const Text('Общее'), selected: selected.isEmpty, onSelected: (_) => setSheetState(() => selected = [])),
-                ...boards.map((board) => FilterChip(label: Text(board.name), selected: selected.contains(board.id), onSelected: (value) => setSheetState(() {
-                  if (value) {
-                    selected = [...selected.where((id) => id != board.id), board.id];
-                  } else {
-                    selected = selected.where((id) => id != board.id).toList();
-                  }
-                }))),
-              ]),
-              const SizedBox(height: 18),
-              SizedBox(width: double.infinity, child: FilledButton(onPressed: () => Navigator.pop(sheetContext, List.unmodifiable(selected)), child: const Text('Сохранить'))),
-            ]),
-          ),
-        ),
-      ),
-    );
-    if (result == null) return;
-    final updated = product.copyWith(boardIds: result);
-    await widget.repository.upsertProduct(updated);
-    if (!mounted) return;
-    setState(() {
-      final index = products.indexWhere((p) => p.id == product.id);
-      if (index >= 0) products[index] = updated;
-    });
-  }
-
-  Future<void> _deleteProduct(Product product) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Удалить товар?'),
-        content: Text(product.title),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Отмена')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Удалить')),
-        ],
-      ),
-    );
-    if (ok != true) return;
-    await widget.repository.deleteProduct(product.id);
-    if (mounted) setState(() => products.removeWhere((p) => p.id == product.id));
-  }
-
-  Future<void> _createBoard() async {
-    final controller = TextEditingController();
-    final name = await showDialog<String>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Новая доска'),
-        content: TextField(controller: controller, autofocus: true, decoration: const InputDecoration(hintText: 'Например, Мастерская')),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Отмена')),
-          FilledButton(onPressed: () => Navigator.pop(context, controller.text.trim()), child: const Text('Создать')),
-        ],
-      ),
-    );
-    controller.dispose();
-    if (name == null || name.isEmpty) return;
-    final board = Board(id: widget.repository.newId(), name: name, createdAt: DateTime.now(), sortOrder: boards.length);
-    await widget.repository.upsertBoard(board);
-    if (mounted) setState(() => boards.add(board));
-  }
-
   Future<void> _refreshPrices({bool showSummary = false}) async {
     if (refreshingPrices) return;
     await _loadFuture;
@@ -606,15 +480,16 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _snack(String message) => ScaffoldMessenger.of(context)..hideCurrentSnackBar()..showSnackBar(SnackBar(content: Text(message)));
 
-  Widget _boardChip({required String label, required bool selected, required VoidCallback onTap}) {
+  Widget _boardChip(BuildContext context, {required String label, required bool selected, required VoidCallback onTap}) {
     final scheme = Theme.of(context).colorScheme;
-    return GestureDetector(
+    return InkWell(
       onTap: onTap,
+      borderRadius: BorderRadius.circular(999),
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 180),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+        duration: const Duration(milliseconds: 160),
+        padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 8),
         decoration: BoxDecoration(
-          color: selected ? scheme.onSurface : scheme.surfaceContainerHighest.withValues(alpha: .65),
+          color: selected ? scheme.primary : scheme.surfaceContainerHighest.withValues(alpha: .72),
           borderRadius: BorderRadius.circular(999),
         ),
         child: Text(label, style: TextStyle(color: selected ? scheme.surface : scheme.onSurface, fontWeight: selected ? FontWeight.w700 : FontWeight.w500, fontSize: 13)),
@@ -626,14 +501,38 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     if (!ready) return const Scaffold(body: Center(child: CircularProgressIndicator()));
     final items = visible;
-    final boardActive = selectedBoardFilter == null ? 'all' : selectedBoardFilter;
+    final boardActive = selectedBoardFilter ?? 'all';
     return Scaffold(
       appBar: AppBar(
         titleSpacing: 18,
         title: const Text('Pinzon', style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: -.4)),
         actions: [
           IconButton(tooltip: 'Поиск', onPressed: () => _showSearchField(), icon: const Icon(Icons.search_rounded)),
-          IconButton(tooltip: 'Ещё', onPressed: () => _showHomeMenu(), icon: const Icon(Icons.more_horiz_rounded)),
+          PopupMenuButton<String>(
+            tooltip: 'Ещё',
+            onSelected: (value) {
+              switch (value) {
+                case 'refresh':
+                  _refreshPrices(showSummary: true);
+                case 'layout':
+                  setState(() => layout = layout == LayoutMode.masonry ? LayoutMode.list : LayoutMode.masonry);
+                case 'sort':
+                  _showSortMenu();
+                case 'source':
+                  _showSourceMenu();
+                case 'settings':
+                  _settings();
+              }
+            },
+            itemBuilder: (_) => [
+              PopupMenuItem(value: 'refresh', enabled: !refreshingPrices, child: Text(refreshingPrices ? 'Обновление цен…' : 'Обновить цены')),
+              PopupMenuItem(value: 'layout', child: Text(layout == LayoutMode.masonry ? 'Показывать списком' : 'Показывать сеткой')),
+              const PopupMenuItem(value: 'sort', child: Text('Сортировка')),
+              const PopupMenuItem(value: 'source', child: Text('Магазин')),
+              const PopupMenuItem(value: 'settings', child: Text('Настройки')),
+            ],
+            icon: const Icon(Icons.more_horiz_rounded),
+          ),
         ],
       ),
       body: Column(
@@ -641,115 +540,37 @@ class _HomeScreenState extends State<HomeScreen> {
           SizedBox(
             height: 48,
             child: ListView(
-              padding: const EdgeInsets.fromLTRB(16, 4, 16, 6),
               scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
               children: [
-                _boardChip(label: 'Все', selected: boardActive == 'all' && selectedSource == null, onTap: () => setState(() { selectedBoardFilter = null; selectedSource = null; })),
+                _boardChip(context, label: 'Все', selected: boardActive == 'all', onTap: () => setState(() { selectedBoardFilter = null; selectedSource = null; })),
                 const SizedBox(width: 8),
-                _boardChip(label: 'Общее', selected: boardActive == _commonBoardFilter, onTap: () => setState(() { selectedBoardFilter = _commonBoardFilter; selectedSource = null; })),
-                ...boards.expand((board) => [const SizedBox(width: 8), _boardChip(label: board.name, selected: selectedBoardFilter == board.id, onTap: () => setState(() { selectedBoardFilter = board.id; selectedSource = null; }))]),
+                _boardChip(context, label: 'Общее', selected: selectedBoardFilter == _commonBoardFilter, onTap: () => setState(() { selectedBoardFilter = _commonBoardFilter; selectedSource = null; })),
+                ...boards.expand((board) => [const SizedBox(width: 8), _boardChip(context, label: board.name, selected: selectedBoardFilter == board.id, onTap: () => setState(() { selectedBoardFilter = board.id; selectedSource = null; }))]),
                 const SizedBox(width: 8),
-                _boardChip(label: '+ Доска', selected: false, onTap: _createBoard),
+                _boardChip(context, label: '+ Доска', selected: false, onTap: _createBoard),
               ],
             ),
           ),
-          if (selectedSource != null)
-            Padding(padding: const EdgeInsets.fromLTRB(16, 0, 16, 4), child: Row(children: [Text(selectedSource!, style: Theme.of(context).textTheme.labelMedium?.copyWith(fontWeight: FontWeight.w700)), const Spacer(), IconButton(visualDensity: VisualDensity.compact, onPressed: () => setState(() => selectedSource = null), icon: const Icon(Icons.close_rounded, size: 18))])),
+          if (selectedSource != null || query.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+              child: Row(children: [
+                Expanded(child: Text(selectedSource != null ? '${selectedSource!}${query.isNotEmpty ? ' · $query' : ''}' : query, maxLines: 1, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.labelMedium?.copyWith(fontWeight: FontWeight.w600))),
+                TextButton(onPressed: () => setState(() { selectedSource = null; query = ''; }), child: const Text('Сбросить')),
+              ]),
+            ),
           Expanded(
             child: items.isEmpty
-                ? const Center(child: Padding(padding: EdgeInsets.symmetric(horizontal: 28), child: Text('Добавьте товар через + или поделитесь ссылкой из магазина.', textAlign: TextAlign.center)))
+                ? Center(child: Padding(padding: const EdgeInsets.symmetric(horizontal: 32), child: Column(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.bookmark_border_rounded, size: 46, color: Theme.of(context).colorScheme.onSurfaceVariant), const SizedBox(height: 12), const Text('Добавьте товар через + или поделитесь ссылкой из магазина.', textAlign: TextAlign.center)])))
                 : layout == LayoutMode.masonry
-                    ? MasonryGridView.count(padding: const EdgeInsets.fromLTRB(16, 8, 16, 88), crossAxisCount: 2, mainAxisSpacing: 16, crossAxisSpacing: 12, itemCount: items.length, itemBuilder: (_, i) => ProductCard(product: items[i], onTap: () => _openProduct(items[i]), onLongPress: () => _showProductMenu(items[i])))
-                    : ListView.separated(padding: const EdgeInsets.fromLTRB(16, 8, 16, 88), itemCount: items.length, separatorBuilder: (_, __) => const SizedBox(height: 10), itemBuilder: (_, i) => ProductListTile(product: items[i], onTap: () => _openProduct(items[i]), onLongPress: () => _showProductMenu(items[i]))),
+                    ? MasonryGridView.count(padding: const EdgeInsets.fromLTRB(16, 8, 16, 100), crossAxisCount: 2, mainAxisSpacing: 18, crossAxisSpacing: 14, itemCount: items.length, itemBuilder: (_, i) => ProductCard(product: items[i], onTap: () => _openProduct(items[i]), onLongPress: () => _showProductMenu(items[i])))
+                    : ListView.separated(padding: const EdgeInsets.fromLTRB(16, 8, 16, 100), itemCount: items.length, separatorBuilder: (_, __) => const SizedBox(height: 10), itemBuilder: (_, i) => ProductListTile(product: items[i], onTap: () => _openProduct(items[i]), onLongPress: () => _showProductMenu(items[i]))),
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton(onPressed: _showAddDialog, tooltip: 'Добавить товар', child: const Icon(Icons.add_rounded)),
+      floatingActionButton: FloatingActionButton(onPressed: importing ? null : _showAddDialog, child: importing ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.add_rounded)),
     );
-  }
-
-  Future<void> _showSearchField() async {
-    final controller = TextEditingController(text: query);
-    final value = await showModalBottomSheet<String>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (sheetContext) => Padding(
-        padding: EdgeInsets.fromLTRB(16, 8, 16, MediaQuery.viewInsetsOf(sheetContext).bottom + 20),
-        child: TextField(
-          controller: controller,
-          autofocus: true,
-          onChanged: (value) => setState(() => query = value),
-          decoration: InputDecoration(prefixIcon: const Icon(Icons.search_rounded), hintText: 'Найти товар', suffixIcon: IconButton(onPressed: () { controller.clear(); setState(() => query = ''); }, icon: const Icon(Icons.close_rounded))),
-          onSubmitted: (value) => Navigator.pop(sheetContext, value),
-        ),
-      ),
-    );
-    controller.dispose();
-    if (value != null) setState(() => query = value);
-  }
-
-  Future<void> _showHomeMenu() async {
-    await showModalBottomSheet(
-      context: context,
-      showDragHandle: true,
-      builder: (_) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(8, 4, 8, 12),
-          child: Wrap(children: [
-            ListTile(leading: Icon(layout == LayoutMode.masonry ? Icons.view_list_rounded : Icons.grid_view_rounded), title: Text(layout == LayoutMode.masonry ? 'Список' : 'Сетка'), onTap: () { Navigator.pop(context); setState(() => layout = layout == LayoutMode.masonry ? LayoutMode.list : LayoutMode.masonry); }),
-            ListTile(leading: const Icon(Icons.sort_rounded), title: const Text('Сортировка'), subtitle: Text(_sortLabel()), onTap: () async { Navigator.pop(context); await _showSortMenu(); }),
-            ListTile(leading: const Icon(Icons.storefront_outlined), title: const Text('Фильтр по сайту'), onTap: () async { Navigator.pop(context); await _showSourceMenu(); }),
-            ListTile(leading: refreshingPrices ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.refresh_rounded), title: const Text('Обновить цены'), enabled: !refreshingPrices, onTap: () { Navigator.pop(context); _refreshPrices(showSummary: true); }),
-            ListTile(leading: const Icon(Icons.palette_outlined), title: const Text('Тема'), onTap: () { Navigator.pop(context); _chooseTheme(); }),
-            ListTile(leading: const Icon(Icons.settings_outlined), title: const Text('Настройки и резервная копия'), onTap: () { Navigator.pop(context); _settings(); }),
-          ]),
-        ),
-      ),
-    );
-  }
-
-  String _sortLabel() => switch (sort) {
-        SortMode.newest => 'Новые',
-        SortMode.oldest => 'Старые',
-        SortMode.priceUp => 'Цена ↑',
-        SortMode.priceDown => 'Цена ↓',
-        SortMode.name => 'По названию',
-        SortMode.priority => 'Приоритет',
-      };
-
-  Future<void> _showSortMenu() async {
-    final value = await showModalBottomSheet<SortMode>(
-      context: context,
-      showDragHandle: true,
-      builder: (context) => SafeArea(child: Column(mainAxisSize: MainAxisSize.min, children: [
-        for (final entry in const [
-          (SortMode.newest, 'Новые'),
-          (SortMode.oldest, 'Старые'),
-          (SortMode.priceUp, 'Цена ↑'),
-          (SortMode.priceDown, 'Цена ↓'),
-          (SortMode.name, 'По названию'),
-          (SortMode.priority, 'Приоритет'),
-        ])
-          ListTile(title: Text(entry.$2), trailing: sort == entry.$1 ? const Icon(Icons.check_rounded) : null, onTap: () => Navigator.pop(context, entry.$1)),
-        const SizedBox(height: 8),
-      ])),
-    );
-    if (value != null) setState(() => sort = value);
-  }
-
-  Future<void> _showSourceMenu() async {
-    final value = await showModalBottomSheet<String?>(
-      context: context,
-      showDragHandle: true,
-      builder: (context) => SafeArea(child: Column(mainAxisSize: MainAxisSize.min, children: [
-        const ListTile(title: Text('Сайт', style: TextStyle(fontWeight: FontWeight.w800))),
-        ListTile(title: const Text('Все сайты'), trailing: selectedSource == null ? const Icon(Icons.check_rounded) : null, onTap: () => Navigator.pop(context, null)),
-        ...sources.map((source) => ListTile(title: Text(source), trailing: selectedSource == source ? const Icon(Icons.check_rounded) : null, onTap: () => Navigator.pop(context, source))),
-        const SizedBox(height: 8),
-      ])),
-    );
-    if (value != null || selectedSource != null) setState(() => selectedSource = value);
   }
 
   Future<void> _showAddDialog() async {
@@ -757,23 +578,166 @@ class _HomeScreenState extends State<HomeScreen> {
     final url = await showModalBottomSheet<String>(
       context: context,
       isScrollControlled: true,
+      useSafeArea: true,
       showDragHandle: true,
-      backgroundColor: Theme.of(context).colorScheme.surface,
       builder: (sheetContext) => Padding(
-        padding: EdgeInsets.fromLTRB(16, 8, 16, MediaQuery.viewInsetsOf(sheetContext).bottom + 20),
-        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        padding: EdgeInsets.fromLTRB(16, 8, 16, 16 + MediaQuery.viewInsetsOf(sheetContext).bottom),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
           Row(children: [Expanded(child: Text('Добавить товар', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900))), IconButton(onPressed: () => Navigator.pop(sheetContext), icon: const Icon(Icons.close_rounded))]),
-          const SizedBox(height: 4),
-          Text('Вставьте ссылку на товар', style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant)),
-          const SizedBox(height: 14),
-          TextField(controller: controller, autofocus: true, keyboardType: TextInputType.url, decoration: const InputDecoration(prefixIcon: Icon(Icons.link_rounded), hintText: 'https://...', border: OutlineInputBorder())),
-          const SizedBox(height: 14),
+          const SizedBox(height: 8),
+          TextField(controller: controller, autofocus: true, keyboardType: TextInputType.url, decoration: const InputDecoration(hintText: 'Вставьте ссылку на товар', prefixIcon: Icon(Icons.link_rounded))),
+          const SizedBox(height: 12),
           SizedBox(width: double.infinity, child: FilledButton(onPressed: () => Navigator.pop(sheetContext, controller.text.trim()), style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(17))), child: const Text('Получить превью'))),
         ]),
       ),
     );
     controller.dispose();
     if (url != null && url.isNotEmpty) await _addUrl(url);
+  }
+
+  Future<void> _showSearchField() async {
+    final controller = TextEditingController(text: query);
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      showDragHandle: true,
+      builder: (sheetContext) => Padding(
+        padding: EdgeInsets.fromLTRB(16, 8, 16, 16 + MediaQuery.viewInsetsOf(sheetContext).bottom),
+        child: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(prefixIcon: Icon(Icons.search_rounded), hintText: 'Найти товар'),
+          onChanged: (value) => setState(() => query = value),
+          onSubmitted: (_) => Navigator.pop(sheetContext),
+        ),
+      ),
+    );
+    controller.dispose();
+  }
+
+  Future<void> _showSortMenu() async {
+    final selected = await showModalBottomSheet<SortMode>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(child: Column(mainAxisSize: MainAxisSize.min, children: [
+        const ListTile(title: Text('Сортировка', style: TextStyle(fontWeight: FontWeight.w900))),
+        ...SortMode.values.map((mode) => ListTile(title: Text(switch (mode) { SortMode.newest => 'Новые', SortMode.oldest => 'Старые', SortMode.priceUp => 'Цена ↑', SortMode.priceDown => 'Цена ↓', SortMode.name => 'По названию', SortMode.priority => 'Приоритет' }), trailing: sort == mode ? const Icon(Icons.check_rounded) : null, onTap: () => Navigator.pop(sheetContext, mode))),
+        const SizedBox(height: 8),
+      ])),
+    );
+    if (selected != null && mounted) setState(() => sort = selected);
+  }
+
+  Future<void> _showSourceMenu() async {
+    final selected = await showModalBottomSheet<String?>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(child: Column(mainAxisSize: MainAxisSize.min, children: [
+        const ListTile(title: Text('Магазин', style: TextStyle(fontWeight: FontWeight.w900))),
+        ListTile(title: const Text('Все магазины'), trailing: selectedSource == null ? const Icon(Icons.check_rounded) : null, onTap: () => Navigator.pop(sheetContext, '')),
+        ...sources.map((source) => ListTile(title: Text(source), trailing: selectedSource == source ? const Icon(Icons.check_rounded) : null, onTap: () => Navigator.pop(sheetContext, source))),
+      ])),
+    );
+    if (selected != null && mounted) setState(() => selectedSource = selected.isEmpty ? null : selected);
+  }
+
+  Future<void> _showProductMenu(Product product) async {
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Padding(padding: const EdgeInsets.fromLTRB(20, 4, 20, 10), child: Align(alignment: Alignment.centerLeft, child: Text(product.title, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800)))),
+        ListTile(leading: const Icon(Icons.edit_outlined), title: const Text('Изменить'), onTap: () => Navigator.pop(sheetContext, 'edit')),
+        ListTile(leading: const Icon(Icons.open_in_new_outlined), title: const Text('Открыть на сайте'), onTap: () => Navigator.pop(sheetContext, 'open')),
+        ListTile(leading: const Icon(Icons.drive_file_move_outlined), title: const Text('Переместить в доску'), onTap: () => Navigator.pop(sheetContext, 'move')),
+        ListTile(leading: const Icon(Icons.delete_outline_rounded), title: const Text('Удалить'), onTap: () => Navigator.pop(sheetContext, 'delete')),
+        const SizedBox(height: 8),
+      ])),
+    );
+    switch (choice) {
+      case 'edit':
+        await _editProduct(product);
+      case 'open':
+        final uri = Uri.tryParse(product.url);
+        if (uri != null) await launchUrl(uri, mode: LaunchMode.externalApplication);
+      case 'move':
+        await _moveProduct(product);
+      case 'delete':
+        await _deleteProduct(product);
+    }
+  }
+
+  Future<void> _moveProduct(Product product) async {
+    var selected = [...product.boardIds];
+    final result = await showModalBottomSheet<List<String>>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (sheetContext) => StatefulBuilder(builder: (context, setSheetState) => SafeArea(child: Padding(padding: const EdgeInsets.all(16), child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text('Переместить товар', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900)),
+        const SizedBox(height: 12),
+        Wrap(spacing: 8, runSpacing: 8, children: [
+          ChoiceChip(label: const Text('Общее'), selected: selected.isEmpty, onSelected: (_) => setSheetState(() => selected = [])),
+          ...boards.map((board) => FilterChip(label: Text(board.name), selected: selected.contains(board.id), onSelected: (value) => setSheetState(() => selected = value ? [...selected.where((id) => id != board.id), board.id] : selected.where((id) => id != board.id).toList()))),
+        ]),
+        const SizedBox(height: 16),
+        SizedBox(width: double.infinity, child: FilledButton(onPressed: () => Navigator.pop(sheetContext, List.unmodifiable(selected)), child: const Text('Сохранить'))),
+      ]))),
+    );
+    if (result == null) return;
+    final updated = product.copyWith(boardIds: result);
+    await widget.repository.upsertProduct(updated);
+    if (mounted) setState(() => products = products.map((p) => p.id == updated.id ? updated : p).toList());
+  }
+
+  Future<void> _editProduct(Product product) async {
+    final updated = await showModalBottomSheet<Product>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => ProductEditor(product: product, boards: boards, tags: tags, repository: widget.repository),
+    );
+    if (updated == null) return;
+    await widget.repository.upsertProduct(updated);
+    if (mounted) setState(() => products = products.map((p) => p.id == updated.id ? updated : p).toList());
+  }
+
+  Future<void> _deleteProduct(Product product) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Удалить товар?'),
+        content: Text(product.title),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Отмена')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Удалить')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    await widget.repository.deleteProduct(product.id);
+    if (mounted) setState(() => products.removeWhere((p) => p.id == product.id));
+  }
+
+  Future<void> _createBoard() async {
+    final controller = TextEditingController();
+    final name = await showDialog<String>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Новая доска'),
+        content: TextField(controller: controller, autofocus: true, decoration: const InputDecoration(hintText: 'Например, Мастерская')),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Отмена')),
+          FilledButton(onPressed: () => Navigator.pop(context, controller.text.trim()), child: const Text('Создать')),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (name == null || name.isEmpty) return;
+    final board = Board(id: widget.repository.newId(), name: name, createdAt: DateTime.now(), sortOrder: boards.length);
+    await widget.repository.upsertBoard(board);
+    if (mounted) setState(() => boards.add(board));
   }
 }
 
@@ -836,23 +800,19 @@ class _ProductEditorState extends State<ProductEditor> {
                       )),
                 ],
               ),
-              const SizedBox(height: 14),
-              DropdownButtonFormField<ProductStatus>(initialValue: p.status, decoration: const InputDecoration(labelText: 'Статус'), items: ProductStatus.values.map((s) => DropdownMenuItem(value: s, child: Text(s.label))).toList(), onChanged: (v) => setState(() => p = p.copyWith(status: v ?? p.status))),
-              const SizedBox(height: 10),
-              TextField(decoration: const InputDecoration(labelText: 'Заметка'), controller: TextEditingController(text: p.note), minLines: 3, maxLines: 6, onChanged: (v) => p = p.copyWith(note: v)),
               const SizedBox(height: 18),
-              FilledButton(onPressed: () => Navigator.pop(context, p.copyWith(boardIds: selectedBoardIds)), child: const Text('Сохранить')),
+              const Text('Заметка', style: TextStyle(fontWeight: FontWeight.w800)),
+              const SizedBox(height: 8),
+              TextField(decoration: const InputDecoration(hintText: 'Добавьте заметку'), minLines: 3, maxLines: 5, onChanged: (v) => p = p.copyWith(note: v), controller: TextEditingController(text: p.note)),
+              const SizedBox(height: 18),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, p.copyWith(boardIds: selectedBoardIds)),
+                style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(17))),
+                child: const Text('Сохранить изменения'),
+              ),
+              const SizedBox(height: 20),
             ],
           ),
         ),
       );
-}
-
-extension ProductStatusLabel on ProductStatus {
-  String get label => switch (this) {
-        ProductStatus.wishlist => 'Желаю',
-        ProductStatus.considering => 'Рассматриваю',
-        ProductStatus.purchased => 'Куплено',
-        ProductStatus.archived => 'Архив',
-      };
 }
