@@ -3,7 +3,6 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import '../models/product_preview.dart';
 import '../screens/image_diagnostics_screen.dart';
-import '../services/image_diagnostics.dart';
 import 'product_card.dart';
 
 class ProductPreviewImage extends StatelessWidget {
@@ -23,27 +22,26 @@ class ProductPreviewImage extends StatelessWidget {
       fit: StackFit.expand,
       children: [
         image,
-        if (ImageDiagnostics.hasEntries)
-          Positioned(
-            top: 8,
-            right: 8,
-            child: Material(
-              color: Colors.black.withValues(alpha: .48),
-              shape: const CircleBorder(),
-              child: PopupMenuButton<String>(
-                tooltip: 'Диагностика изображения',
-                icon: const Icon(Icons.bug_report_outlined, color: Colors.white, size: 20),
-                onSelected: (value) {
-                  if (value == 'diagnostics') {
-                    Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ImageDiagnosticsScreen()));
-                  }
-                },
-                itemBuilder: (_) => const [
-                  PopupMenuItem(value: 'diagnostics', child: Text('Диагностика изображения')),
-                ],
-              ),
+        Positioned(
+          top: 8,
+          right: 8,
+          child: Material(
+            color: Colors.black.withValues(alpha: .48),
+            shape: const CircleBorder(),
+            child: PopupMenuButton<String>(
+              tooltip: 'Диагностика изображения',
+              icon: const Icon(Icons.bug_report_outlined, color: Colors.white, size: 20),
+              onSelected: (value) {
+                if (value == 'diagnostics') {
+                  Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ImageDiagnosticsScreen()));
+                }
+              },
+              itemBuilder: (_) => const [
+                PopupMenuItem(value: 'diagnostics', child: Text('Диагностика изображения')),
+              ],
             ),
           ),
+        ),
       ],
     );
   }
