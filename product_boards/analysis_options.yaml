@@ -12,4 +12,3 @@ linter:
     # async-операций; правило не должно блокировать CI как информационное замечание.
     use_build_context_synchronously: false
     prefer_if_null_operators: false
-    unused_local_variable: false
