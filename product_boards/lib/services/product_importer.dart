@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:html/parser.dart' as html_parser;
 import 'package:http/http.dart' as http;
+import 'image_diagnostics.dart';
 
 class ImportedProductData {
   const ImportedProductData({this.title, this.imageUrl, this.price, this.currency, this.description});
@@ -16,80 +17,102 @@ class ProductImporter {
   final http.Client _client;
 
   Future<ImportedProductData> fetch(Uri uri) async {
-    final response = await _client.get(_canonicalizeOzon(uri), headers: {
-      'User-Agent': 'Mozilla/5.0 (Linux; Android 14; K) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36',
-      'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-      'Cache-Control': 'no-cache',
-      'Pragma': 'no-cache',
-    }).timeout(const Duration(seconds: 15));
-    if (response.statusCode < 200 || response.statusCode >= 400) {
-      throw Exception('HTTP ${response.statusCode}');
+    ImageDiagnostics.start(uri.toString());
+    final canonicalUri = _canonicalizeOzon(uri);
+    if (canonicalUri != uri) {
+      ImageDiagnostics.log('CANONICALIZE', {'from': uri, 'to': canonicalUri});
     }
-    final document = html_parser.parse(response.body);
 
-    String? meta(String property) => document.querySelector('meta[property="$property"]')?.attributes['content'] ??
-        document.querySelector('meta[name="$property"]')?.attributes['content'];
+    try {
+      final response = await _client.get(canonicalUri, headers: {
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 14; K) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36',
+        'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+        'Cache-Control': 'no-cache',
+        'Pragma': 'no-cache',
+      }).timeout(const Duration(seconds: 15));
+      ImageDiagnostics.response(
+        url: canonicalUri.toString(),
+        statusCode: response.statusCode,
+        contentType: response.headers['content-type'],
+        bytes: response.bodyBytes.length,
+      );
+      if (response.statusCode < 200 || response.statusCode >= 400) {
+        ImageDiagnostics.failure('HTTP', 'HTTP ${response.statusCode}', url: canonicalUri.toString());
+        throw Exception('HTTP ${response.statusCode}');
+      }
+      final document = html_parser.parse(response.body);
 
-    String? title = meta('og:title') ??
-        document.querySelector('meta[name="twitter:title"]')?.attributes['content'] ??
-        document.querySelector('[itemprop="name"]')?.attributes['content'] ??
-        document.querySelector('title')?.text.trim();
-    String? image = meta('og:image') ??
-        meta('twitter:image') ??
-        document.querySelector('[itemprop="image"]')?.attributes['content'];
-    String? description = meta('og:description') ?? meta('twitter:description');
-    double? price;
-    String? currency = meta('product:price:currency');
-    final priceContent = meta('product:price:amount');
-    if (priceContent != null) price = _parsePrice(priceContent);
+      String? meta(String property) => document.querySelector('meta[property="$property"]')?.attributes['content'] ??
+          document.querySelector('meta[name="$property"]')?.attributes['content'];
 
-    for (final node in document.querySelectorAll('script[type="application/ld+json"]')) {
-      try {
-        final decoded = jsonDecode(node.text.trim());
-        final candidates = decoded is List ? decoded : [decoded];
-        for (final candidate in candidates) {
-          if (candidate is! Map) continue;
-          final map = Map<String, dynamic>.from(candidate);
-          final type = '${map['@type'] ?? ''}'.toLowerCase();
-          if (type.contains('product') || map.containsKey('name') || map.containsKey('image')) {
-            title = _string(map['name']) ?? title;
-            image ??= _firstImage(map['image']);
-            description ??= _string(map['description']);
-            final offers = map['offers'];
-            if (offers is Map) {
-              price ??= _parsePrice('${offers['price'] ?? ''}');
-              currency ??= _string(offers['priceCurrency']);
+      String? title = meta('og:title') ??
+          document.querySelector('meta[name="twitter:title"]')?.attributes['content'] ??
+          document.querySelector('[itemprop="name"]')?.attributes['content'] ??
+          document.querySelector('title')?.text.trim();
+      String? image = meta('og:image') ??
+          meta('twitter:image') ??
+          document.querySelector('[itemprop="image"]')?.attributes['content'];
+      ImageDiagnostics.candidate('meta', image);
+      String? description = meta('og:description') ?? meta('twitter:description');
+      double? price;
+      String? currency = meta('product:price:currency');
+      final priceContent = meta('product:price:amount');
+      if (priceContent != null) price = _parsePrice(priceContent);
+
+      for (final node in document.querySelectorAll('script[type="application/ld+json"]')) {
+        try {
+          final decoded = jsonDecode(node.text.trim());
+          final candidates = decoded is List ? decoded : [decoded];
+          for (final candidate in candidates) {
+            if (candidate is! Map) continue;
+            final map = Map<String, dynamic>.from(candidate);
+            final type = '${map['@type'] ?? ''}'.toLowerCase();
+            if (type.contains('product') || map.containsKey('name') || map.containsKey('image')) {
+              title = _string(map['name']) ?? title;
+              final jsonLdImage = _firstImage(map['image']);
+              if (image == null) image = jsonLdImage;
+              ImageDiagnostics.candidate('json-ld', jsonLdImage);
+              description ??= _string(map['description']);
+              final offers = map['offers'];
+              if (offers is Map) {
+                price ??= _parsePrice('${offers['price'] ?? ''}');
+                currency ??= _string(offers['priceCurrency']);
+              }
             }
           }
+        } catch (error, stackTrace) {
+          ImageDiagnostics.failure('JSON_LD', error, stackTrace: stackTrace);
         }
-      } catch (_) {
-        // Some pages contain multiple invalid JSON-LD snippets; continue with OG metadata.
       }
-    }
 
-    // Ozon may inline product data without standard OG tags.
-    if (title == null || image == null) {
-      final raw = response.body;
-      if (title == null) {
-        final m = RegExp(r'\"name\"\s*:\s*\"([^\"]{3,500})\"').firstMatch(raw);
-        title = _jsonUnescape(m?.group(1));
+      if (title == null || image == null) {
+        final raw = response.body;
+        if (title == null) {
+          final m = RegExp(r'\"name\"\s*:\s*\"([^\"]{3,500})\"').firstMatch(raw);
+          title = _jsonUnescape(m?.group(1));
+        }
+        if (image == null) {
+          final m = RegExp(r'\"(?:image|images)\"\s*:\s*(?:\[\s*)?\"([^\"]+\.(?:jpg|jpeg|png|webp)[^\"\\]*)', caseSensitive: false).firstMatch(raw);
+          image = m?.group(1);
+          ImageDiagnostics.candidate('embedded-json', image);
+        }
       }
-      if (image == null) {
-        // Хвост без \ и ", чтобы не захватывать экранирующий backslash
-        // перед закрывающей \" в JSON-инлайне Ozon.
-        final m = RegExp(r'\"(?:image|images)\"\s*:\s*(?:\[\s*)?\"([^\"]+\.(?:jpg|jpeg|png|webp)[^\"\\]*)', caseSensitive: false).firstMatch(raw);
-        image = m?.group(1);
-      }
-    }
 
-    return ImportedProductData(
-      title: _clean(title),
-      imageUrl: _absoluteImage(uri, image),
-      price: price,
-      currency: currency,
-      description: _clean(description),
-    );
+      final absoluteImage = _absoluteImage(uri, image);
+      ImageDiagnostics.candidate('final', absoluteImage);
+      ImageDiagnostics.result('IMPORT_RESULT', url: absoluteImage);
+      return ImportedProductData(
+        title: _clean(title),
+        imageUrl: absoluteImage,
+        price: price,
+        currency: currency,
+        description: _clean(description),
+      );
+    } catch (error, stackTrace) {
+      ImageDiagnostics.failure('IMPORT', error, url: canonicalUri.toString(), stackTrace: stackTrace);
+      rethrow;
+    }
   }
 
   static Uri _canonicalizeOzon(Uri uri) {
