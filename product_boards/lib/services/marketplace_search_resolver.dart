@@ -15,6 +15,8 @@ class MarketplaceSearchCandidate {
   final String title;
   final double score;
   final String engine;
+
+  
 }
 
 class MarketplaceSearchResolver {
@@ -231,8 +233,6 @@ class MarketplaceSearchResolver {
     final matches = <Uri>[];
     final seen = <String>{};
 
-    // Search the raw document first. Do not URI-decode the entire HTML: Google
-    // pages contain arbitrary percent signs and malformed percent escapes.
     final patterns = <RegExp>[
       RegExp(
         r'https?(?::|%3A)//(?:www\.)?ozon(?:\.ru|%2Eru)/product/[A-Za-z0-9\-_%./~?=&%]+',
@@ -253,7 +253,7 @@ class MarketplaceSearchResolver {
         var raw = match.group(0) ?? '';
         raw = _decodeFragmentSafely(raw);
         raw = raw.replaceAll(r'\/', '/').replaceAll('&amp;', '&');
-        raw = raw.replaceAll(RegExp(r'[\\"<>\]\[,;)]+$'), '');
+        raw = _stripTrailingDelimiters(raw);
         if (!raw.startsWith('http')) raw = 'https://$raw';
 
         final uri = Uri.tryParse(raw);
@@ -263,10 +263,8 @@ class MarketplaceSearchResolver {
       }
     }
 
-    // Google can wrap the real URL into /url?q=... or similar redirects.
-    // Inspect each href independently and decode only the relevant parameter.
     if (matches.isEmpty) {
-      final hrefPattern = RegExp(r'href=["\']([^"\']+)["\']', caseSensitive: false);
+      final hrefPattern = RegExp(r"href=['\"]([^'\"]+)['\"]", caseSensitive: false);
       for (final match in hrefPattern.allMatches(text)) {
         final href = match.group(1);
         if (href == null) continue;
@@ -308,7 +306,7 @@ class MarketplaceSearchResolver {
   }
 
   static String _stripTrailingDelimiters(String value) =>
-      value.replaceAll(RegExp(r'[\\"<>\]\[,;)]+$'), '');
+      value.replaceAll(RegExp(r'''[\\"<>\]\[,;)]+$'''), '');
 
   static bool _isOzonProduct(Uri uri) {
     return (uri.host == 'ozon.ru' || uri.host.endsWith('.ozon.ru')) &&
