@@ -18,8 +18,8 @@ class SmartSortResult {
   final List<SmartSortAlternative> alternatives;
   final bool hasImageSignal;
 
-  bool get isConfident => score >= 0.45 && category != 'Другое';
-  bool get needsReview => score < 0.45 || alternatives.isNotEmpty;
+  bool get isConfident => score >= 0.50 && category != 'Другое';
+  bool get needsReview => score < 0.50 || alternatives.isNotEmpty;
 }
 
 class SmartSortAlternative {
@@ -29,58 +29,164 @@ class SmartSortAlternative {
   final double score;
 }
 
-/// Experimental local classifier for Smart Sort v2.
+/// Experimental local classifier for Smart Sort v3.
 ///
-/// It is still deterministic and does not use a network, embeddings, or an
-/// LLM. The important change is that classification is now based on a
-/// normalized ProductFeatures object and returns top alternatives instead of
-/// collapsing every uncertain item into "Другое".
+/// This version is still fully offline and deterministic. It deliberately does
+/// not pretend that keywords are embeddings: instead it improves recall with
+/// aliases, product phrases, URL decoding, weighted evidence and contradiction
+/// penalties. The API is kept ready for a future embedding/vision backend.
 class SmartSortService {
   static const Map<String, List<String>> _keywords = {
     'Одежда': [
       'футболк', 'майк', 'худи', 'толстовк', 'свитшот', 'куртк', 'пальто',
       'плащ', 'брюк', 'штаны', 'джинс', 'рубаш', 'плать', 'юбк', 'носк',
-      'бель', 'одежд', 'кофт', 'свитер', 'жакет', 'жилет', 'шорт', 'толстовка',
+      'бель', 'одежд', 'кофт', 'свитер', 'жакет', 'жилет', 'шорт', 'топ',
+      'леггинс', 'спортивк', 'ветровк', 'парка', 'кардиган', 'пиджак',
+      'комбинезон', 'костюм', 'флис', 'лонгслив', 'поло', 'боди', 'халат',
     ],
     'Обувь': [
       'кроссов', 'кед', 'ботин', 'сапог', 'туфл', 'сандал', 'сланц',
-      'обув', 'крипер', 'тапоч', 'мокасин', 'кросс',
+      'обув', 'тапоч', 'мокасин', 'шлепан', 'угги', 'балетк', 'полуботин',
+      'берц', 'чешк', 'босонож',
     ],
     'Электроника': [
-      'смартфон', 'телефон', 'iphone', 'android', 'ноутбук', 'планшет',
-      'монитор', 'наушник', 'колонк', 'клавиатур', 'мыш', 'зарядк', 'кабел',
-      'телевизор', 'камера', 'фотоаппарат', 'микрофон', 'роутер', 'ssd',
-      'флешк', 'электрон', 'геймпад', 'пауэрбанк', 'powerbank', 'пк', 'компьютер',
+      'смартфон', 'телефон', 'iphone', 'android', 'ноутбук', 'ультрабук',
+      'планшет', 'электронная книг', 'монитор', 'наушник', 'колонк',
+      'клавиатур', 'мыш', 'зарядк', 'кабел', 'телевизор', 'телевиз', 'камера',
+      'фотоаппарат', 'микрофон', 'роутер', 'модем', 'ssd', 'hdd', 'флешк',
+      'электрон', 'геймпад', 'пауэрбанк', 'powerbank', 'пк', 'компьютер',
+      'видеокарт', 'процессор', 'материнск', 'оперативн', 'принтер', 'сканер',
+      'проектор', 'умные часы', 'смарт часы', 'часы', 'приставк', 'консол',
+      'webcam', 'веб камер', 'акустик', 'саундбар', 'усилител', 'диктофон',
     ],
     'Дом': [
       'мебел', 'стол', 'стул', 'кресл', 'диван', 'кроват', 'шкаф', 'полк',
       'ламп', 'светильник', 'посуда', 'тарел', 'чашк', 'кухн', 'ванн',
-      'интерьер', 'декор', 'подушк', 'матрас', 'штор', 'дом', 'пылесос',
-      'чайник', 'кофевар', 'блендер',
+      'интерьер', 'декор', 'подушк', 'матрас', 'штор', 'пылесос', 'чайник',
+      'кофевар', 'блендер', 'микроволн', 'духовк', 'мультиварк', 'утюг',
+      'отпаривател', 'сушилк', 'увлажнител', 'очистител воздуха', 'ведр',
+      'контейнер', 'органайзер', 'постель', 'полотенц', 'зеркал', 'ваза',
+      'сервиз', 'сковород', 'кастрюл', 'нож кухон',
     ],
     'Инструменты': [
       'дрел', 'шуруповерт', 'перфоратор', 'болгарк', 'лобзик', 'пил',
       'молоток', 'отвертк', 'ключ', 'инструмент', 'сверл', 'крепеж',
-      'компрессор', 'паяльник', 'мультиметр', 'набор инструмент',
+      'компрессор', 'паяльник', 'мультиметр', 'стремянк', 'уровень',
+      'рулетк', 'тесак', 'стусл', 'тиск', 'шлифмаш', 'фрезер', 'краскопульт',
     ],
     'Игры': [
-      'игр', 'steam', 'playstation', 'xbox', 'nintendo', 'switch', 'гейм',
-      'gaming', 'rpg', 'minecraft', 'lego', 'консол', 'game',
+      'steam', 'playstation', 'xbox', 'nintendo', 'switch', 'гейм', 'gaming',
+      'rpg', 'minecraft', 'lego', 'консол', 'game', 'игровой', 'игр',
+      'настольн игра', 'настольная игр', 'карточная игр', 'пазл', 'головоломк',
     ],
     'Спорт': [
-      'спорт', 'фитнес', 'тренаж', 'гантел', 'штанг', 'йог', 'бег',
-      'велосипед', 'турник', 'мяч', 'баскетбол', 'футбол', 'лыж', 'сноуборд',
-      'эспандер', 'гимнаст',
+      'спорт', 'фитнес', 'тренаж', 'гантел', 'штанг', 'йог', 'бег', 'велосипед',
+      'турник', 'мяч', 'баскетбол', 'футбол', 'лыж', 'сноуборд', 'эспандер',
+      'гимнаст', 'ролик', 'скейтборд', 'самокат', 'коньк', 'ракетк', 'теннис',
+      'бадминтон', 'рыбалк', 'удочк', 'палатк', 'спальник', 'туризм',
     ],
     'Красота': [
-      'космет', 'шампун', 'крем', 'парфюм', 'дух', 'макияж', 'помад',
-      'тушь', 'сыворотк', 'уход', 'волос', 'маникюр', 'бритв', 'дезодорант',
+      'космет', 'шампун', 'крем', 'парфюм', 'дух', 'макияж', 'помад', 'тушь',
+      'сыворотк', 'уход', 'волос', 'маникюр', 'бритв', 'дезодорант', 'гель для душа',
+      'кондиционер для волос', 'маск для волос', 'скраб', 'тональн', 'румян',
+      'лак для ногтей', 'фен', 'плойк', 'стайлер', 'эпилятор', 'зубная щетк',
     ],
     'Авто': [
       'авто', 'автомобил', 'машин', 'шин', 'диск', 'масл', 'аккумулятор',
       'автозапчаст', 'фара', 'двигател', 'салон', 'багажник', 'мото',
-      'домкрат', 'автоаксессуар',
+      'домкрат', 'автоаксессуар', 'щетк стекло', 'видеорегистратор',
+      'автоковрик', 'органайзер в багажник', 'компрессор автомобиль',
     ],
+    'Канцелярия': [
+      'канцеляр', 'ручк', 'карандаш', 'маркер', 'фломастер', 'тетрад', 'блокнот',
+      'ежедневник', 'скетчбук', 'бумаг', 'папк', 'степлер', 'скрепк', 'клей',
+      'ластик', 'линейк', 'пенал', 'органайзер', 'краск', 'акварел', 'гуашь',
+      'кисточк', 'чернил', 'письм', 'дневник',
+    ],
+    'Книги': [
+      'книг', 'роман', 'учебник', 'манг', 'комикс', 'энциклопед', 'литератур',
+      'бестселлер', 'артбук', 'пособие', 'справочник', 'атлас', 'альбом',
+    ],
+    'Детское': [
+      'детск', 'ребенк', 'малыш', 'младен', 'для девоч', 'для мальчик',
+      'погремуш', 'коляск', 'автокресло детск', 'детское кресло', 'игрушк',
+      'конструктор', 'кукл', 'плюшев', 'радиоуправляем', 'детский велосипед',
+    ],
+    'Зоотовары': [
+      'для собак', 'для кошек', 'кот', 'собак', 'кошач', 'корм для', 'наполнител',
+      'ошейник', 'поводок', 'лежанк', 'когтеточк', 'переноск', 'аквариум',
+      'зоотовар', 'ветеринар',
+    ],
+    'Сад и дача': [
+      'сад', 'дач', 'газон', 'семен', 'рассад', 'горшок', 'теплиц', 'полив',
+      'шланг', 'секатор', 'лопат', 'грабл', 'тяпк', 'удобр', 'мангал', 'гриль',
+      'барбекю', 'садовый', 'тепличн',
+    ],
+    'Строительство и ремонт': [
+      'строй', 'ремонт', 'цемент', 'шпатлевк', 'штукатур', 'грунтовк', 'краск',
+      'эмаль', 'герметик', 'монтажн', 'профил', 'гипсокартон', 'плитк', 'линолеум',
+      'обои', 'утеплител', 'пен', 'метиз', 'саморез', 'дюбел', 'розетк', 'выключател',
+    ],
+    'Музыка': [
+      'гитар', 'бас-гитар', 'скрипк', 'пианин', 'синтезатор', 'микрофон',
+      'усилител', 'педал', 'миди', 'midi', 'музыкальн', 'барабан', 'струн',
+      'медиатор', 'каподастр', 'ноты', 'аккорд',
+    ],
+    'Хобби и творчество': [
+      'для творчества', 'рукодел', 'вязани', 'шить', 'вышивк', 'бисер', 'фетр',
+      'моделирован', 'модель', 'миниатюр', 'макет', 'выжиган', 'лепк', 'пластик',
+      'эпоксид', 'скрапбукинг', 'оригами', 'аэрограф', 'граффити', 'трафарет',
+    ],
+    'Аксессуары': [
+      'сумк', 'рюкзак', 'кошелек', 'портмоне', 'ремень', 'перчатк', 'шарф',
+      'шапк', 'кепк', 'панам', 'галстук', 'зонт', 'очк', 'солнцезащитн',
+      'чехол', 'брелок', 'часы', 'бижутер', 'серьг', 'кольц', 'браслет', 'цепочк',
+    ],
+    'Продукты': [
+      'продукт', 'кофе', 'чай', 'шоколад', 'сладост', 'печень', 'конфет',
+      'бакале', 'специ', 'соус', 'масл оливков', 'круп', 'макарон', 'консерв',
+      'протеин', 'батончик', 'витамин', 'минерал',
+    ],
+  };
+
+  /// Phrases whose meaning is much stronger than an individual token.
+  static const Map<String, Map<String, double>> _phrases = {
+    'Обувь': {
+      'спортивная обувь': 1.0,
+      'мужская обувь': 0.9,
+      'женская обувь': 0.9,
+      'детская обувь': 0.9,
+      'кроссовки мужские': 1.0,
+      'кроссовки женские': 1.0,
+    },
+    'Одежда': {
+      'верхняя одежда': 1.0,
+      'мужская одежда': 0.9,
+      'женская одежда': 0.9,
+      'спортивная одежда': 0.9,
+    },
+    'Электроника': {
+      'беспроводные наушники': 1.0,
+      'смарт часы': 0.9,
+      'умные часы': 0.9,
+      'игровая приставка': 1.0,
+      'видеокарта': 1.0,
+    },
+    'Дом': {
+      'бытовая техника': 1.0,
+      'кухонная техника': 1.0,
+      'товары для дома': 0.9,
+    },
+    'Строительство и ремонт': {
+      'строительные материалы': 1.0,
+      'отделочные материалы': 1.0,
+    },
+  };
+
+  static const Map<String, List<String>> _negative = {
+    'Игры': ['игровой стол', 'игровое кресло', 'игровой монитор'],
+    'Спорт': ['спортивный костюм', 'спортивная куртка', 'спортивная обувь'],
+    'Аксессуары': ['аксессуары для авто', 'аксессуары для телефона'],
   };
 
   List<SmartSortResult> classifyAll(Iterable<ArchiveItem> items) =>
@@ -92,34 +198,64 @@ class SmartSortService {
 
   SmartSortResult classifyFeatures(ProductFeatures features) {
     final text = _normalize(features.text);
-    final url = _normalize(features.url);
+    final decodedUrl = _decodeUrl(features.url);
+    final url = _normalize(decodedUrl);
+    final combined = '$text $url'.trim();
     final results = <String, _Candidate>{};
 
     for (final entry in _keywords.entries) {
+      var weightedHits = 0.0;
       final matches = <String>[];
-      var textMatches = 0;
-      var urlMatches = 0;
+      var textHits = 0;
+      var urlHits = 0;
 
       for (final keyword in entry.value) {
         final normalizedKeyword = _normalize(keyword);
-        if (text.contains(normalizedKeyword)) {
-          matches.add(keyword);
-          textMatches++;
-        } else if (url.contains(normalizedKeyword)) {
-          matches.add(keyword);
-          urlMatches++;
+        if (normalizedKeyword.isEmpty) continue;
+
+        final inText = _containsTerm(text, normalizedKeyword);
+        final inUrl = !inText && _containsTerm(url, normalizedKeyword);
+        if (!inText && !inUrl) continue;
+
+        matches.add(keyword);
+        if (inText) {
+          textHits++;
+          weightedHits += _keywordWeight(normalizedKeyword, text);
+        } else {
+          urlHits++;
+          weightedHits += 0.45;
         }
       }
 
-      if (matches.isEmpty) continue;
-      results[entry.key] = _Candidate(
-        score: _score(
-          textMatches: textMatches,
-          urlMatches: urlMatches,
-          source: features.source,
-        ),
-        matches: matches.take(4).toList(growable: false),
+      for (final phraseEntry in _phrases[entry.key]?.entries ?? const <MapEntry<String, double>>[]) {
+        if (_containsTerm(combined, _normalize(phraseEntry.key))) {
+          weightedHits += 2.5 * phraseEntry.value;
+          matches.add(phraseEntry.key);
+          textHits++;
+        }
+      }
+
+      if (weightedHits <= 0) continue;
+
+      var score = _score(
+        weightedHits: weightedHits,
+        textMatches: textHits,
+        urlMatches: urlHits,
+        source: features.source,
       );
+
+      for (final negative in _negative[entry.key] ?? const <String>[]) {
+        if (_containsTerm(text, _normalize(negative))) {
+          score -= 0.25;
+        }
+      }
+
+      if (score > 0) {
+        results[entry.key] = _Candidate(
+          score: score.clamp(0.0, 0.98),
+          matches: matches.take(5).toList(growable: false),
+        );
+      }
     }
 
     final ranked = results.entries.toList()
@@ -149,28 +285,46 @@ class SmartSortService {
   }
 
   double _score({
+    required double weightedHits,
     required int textMatches,
     required int urlMatches,
     required String source,
   }) {
-    if (textMatches >= 4) return 0.92;
-    if (textMatches == 3) return 0.82;
-    if (textMatches == 2) return 0.68;
-    if (textMatches == 1) return urlMatches > 0 ? 0.60 : 0.52;
-    if (urlMatches >= 4) return 0.82;
-    if (urlMatches == 3) return 0.72;
-    if (urlMatches == 2) return 0.58;
+    var score = 0.28 + weightedHits * 0.16;
+    if (textMatches > 0) score += 0.06;
+    if (textMatches >= 2) score += 0.08;
+    if (textMatches >= 3) score += 0.08;
+    if (urlMatches > 0) score += source == 'unknown' ? 0.02 : 0.04;
+    return score.clamp(0.0, 0.98);
+  }
 
-    // Marketplace URLs are useful context, but should never turn a weak
-    // single-token match into a high-confidence classification.
-    if (urlMatches == 1 && source != 'unknown') return 0.42;
-    return 0.35;
+  double _keywordWeight(String keyword, String text) {
+    // Exact product phrases are more informative than generic category words.
+    if (keyword.length >= 10) return 1.35;
+    if (keyword.length >= 7) return 1.15;
+    if (text.split(' ').contains(keyword)) return 1.10;
+    return 0.90;
+  }
+
+  bool _containsTerm(String text, String term) {
+    if (term.contains(' ')) return text.contains(term);
+    return RegExp(r'(^|\s)' + RegExp.escape(term) + r'[a-zа-я0-9]*($|\s)').hasMatch(text) ||
+        text.contains(term);
+  }
+
+  String _decodeUrl(String value) {
+    try {
+      return Uri.decodeFull(value.replaceAll(RegExp(r'[+_]'), ' '));
+    } catch (_) {
+      return value.replaceAll(RegExp(r'[+_]'), ' ');
+    }
   }
 
   String _normalize(String value) => value
       .toLowerCase()
       .replaceAll('ё', 'е')
       .replaceAll(RegExp(r'[^a-zа-я0-9]+'), ' ')
+      .replaceAll(RegExp(r'\s+'), ' ')
       .trim();
 }
 
