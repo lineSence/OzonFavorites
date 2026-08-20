@@ -1,467 +1,249 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'models/board.dart';
-import 'models/product.dart';
-import 'models/product_preview.dart';
-import 'models/tag.dart';
-import 'repositories/local_repository.dart';
-import 'repositories/product_repository.dart';
-import 'screens/image_diagnostics_screen.dart';
-import 'screens/product_detail_screen.dart';
-import 'services/backup_service.dart';
-import 'services/price_tracker.dart';
-import 'services/product_preview_resolver.dart';
-import 'widgets/product_card.dart';
-import 'widgets/product_preview_image.dart';
+
+import 'models/archive_item.dart';
+import 'models/category.dart';
+import 'repositories/archive_repository.dart';
+import 'repositories/local_archive_repository.dart';
+import 'services/metadata_queue.dart';
+import 'services/url_normalizer.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  final repository = LocalRepository();
+  final repository = LocalArchiveRepository();
   await repository.init();
-  runApp(ProductBoardsApp(repository: repository));
+  final queue = MetadataQueue(repository: repository);
+  unawaited(queue.resumePending());
+  runApp(PinzonApp(repository: repository, queue: queue));
 }
 
-class ProductBoardsApp extends StatefulWidget {
-  const ProductBoardsApp({super.key, required this.repository});
-  final ProductRepository repository;
+class PinzonApp extends StatefulWidget {
+  const PinzonApp({super.key, required this.repository, required this.queue});
+  final ArchiveRepository repository;
+  final MetadataQueue queue;
+
   @override
-  State<ProductBoardsApp> createState() => _ProductBoardsAppState();
+  State<PinzonApp> createState() => _PinzonAppState();
 }
 
-class _ProductBoardsAppState extends State<ProductBoardsApp> {
-  static const shareChannel = MethodChannel('product_boards/share');
-  SharePayload? sharedPayload;
-  ThemeMode themeMode = ThemeMode.system;
+class _PinzonAppState extends State<PinzonApp> {
+  static const channel = MethodChannel('product_boards/share');
+  Map<Object?, Object?>? sharedData;
 
   @override
   void initState() {
     super.initState();
-    _loadThemeMode();
-    shareChannel.setMethodCallHandler((call) async {
-      if (call.method == 'sharedData' && call.arguments is Map) {
-        setState(() => sharedPayload = SharePayload.fromMap(Map<Object?, Object?>.from(call.arguments as Map)));
+    channel.setMethodCallHandler((call) async {
+      if (call.method == 'sharedData' && call.arguments is Map && mounted) {
+        setState(() => sharedData = Map<Object?, Object?>.from(call.arguments as Map));
       }
     });
-    shareChannel.invokeMethod('getInitialSharedData').then((value) {
-      if (value is Map && mounted) setState(() => sharedPayload = SharePayload.fromMap(Map<Object?, Object?>.from(value)));
+    channel.invokeMethod('getInitialSharedData').then((value) {
+      if (value is Map && mounted) setState(() => sharedData = Map<Object?, Object?>.from(value));
     });
   }
-
-  Future<void> _loadThemeMode() async {
-    final prefs = await SharedPreferences.getInstance();
-    final value = prefs.getString('theme_mode');
-    if (!mounted) return;
-    setState(() => themeMode = switch (value) {
-          'light' => ThemeMode.light,
-          'dark' => ThemeMode.dark,
-          _ => ThemeMode.system,
-        });
-  }
-
-  Future<void> _setThemeMode(ThemeMode mode) async {
-    setState(() => themeMode = mode);
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('theme_mode', switch (mode) {
-      ThemeMode.light => 'light',
-      ThemeMode.dark => 'dark',
-      ThemeMode.system => 'system',
-    });
-  }
-
-  ThemeData _lightTheme() => ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.black, brightness: Brightness.light),
-        scaffoldBackgroundColor: const Color(0xfff6f5f1),
-        appBarTheme: const AppBarTheme(backgroundColor: Colors.transparent, elevation: 0, surfaceTintColor: Colors.transparent),
-        inputDecorationTheme: const InputDecorationTheme(filled: true),
-      );
-
-  ThemeData _darkTheme() => ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.white, brightness: Brightness.dark),
-        scaffoldBackgroundColor: const Color(0xff111111),
-        cardColor: const Color(0xff1a1a1a),
-        appBarTheme: const AppBarTheme(backgroundColor: Colors.transparent, elevation: 0, surfaceTintColor: Colors.transparent),
-        inputDecorationTheme: const InputDecorationTheme(filled: true),
-      );
 
   @override
   Widget build(BuildContext context) => MaterialApp(
         debugShowCheckedModeBanner: false,
         title: 'Pinzon',
-        theme: _lightTheme(),
-        darkTheme: _darkTheme(),
-        themeMode: themeMode,
-        home: HomeScreen(
+        theme: ThemeData(
+          useMaterial3: true,
+          colorScheme: ColorScheme.fromSeed(seedColor: Colors.black),
+          scaffoldBackgroundColor: const Color(0xfff6f6f4),
+        ),
+        home: ArchiveScreen(
           repository: widget.repository,
-          sharedPayload: sharedPayload,
-          themeMode: themeMode,
-          onThemeModeChanged: _setThemeMode,
-          consumeSharedPayload: () => setState(() => sharedPayload = null),
+          queue: widget.queue,
+          sharedData: sharedData,
+          consumeSharedData: () => setState(() => sharedData = null),
         ),
       );
 }
 
-class SharePayload {
-  const SharePayload({this.url, this.title, this.imagePath});
-  final String? url;
-  final String? title;
-  final String? imagePath;
-  factory SharePayload.fromMap(Map<Object?, Object?> map) => SharePayload(
-        url: map['url']?.toString(),
-        title: map['title']?.toString(),
-        imagePath: map['imagePath']?.toString(),
-      );
-}
+class ArchiveScreen extends StatefulWidget {
+  const ArchiveScreen({super.key, required this.repository, required this.queue, required this.consumeSharedData, this.sharedData});
+  final ArchiveRepository repository;
+  final MetadataQueue queue;
+  final Map<Object?, Object?>? sharedData;
+  final VoidCallback consumeSharedData;
 
-enum SortMode { newest, oldest, priceUp, priceDown, name, priority }
-enum LayoutMode { masonry, list }
-const _commonBoardFilter = '__common__';
-class _BoardSelection {
-  const _BoardSelection(this.boardIds);
-  final List<String> boardIds;
-}
-
-class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key, required this.repository, required this.consumeSharedPayload, this.sharedPayload, required this.themeMode, required this.onThemeModeChanged});
-  final ProductRepository repository;
-  final VoidCallback consumeSharedPayload;
-  final SharePayload? sharedPayload;
-  final ThemeMode themeMode;
-  final Future<void> Function(ThemeMode) onThemeModeChanged;
   @override
-  State<HomeScreen> createState() => _HomeScreenState();
+  State<ArchiveScreen> createState() => _ArchiveScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
-  final backupService = BackupService();
-  final resolver = ProductPreviewResolver();
-  final searchController = TextEditingController();
-  final searchFocus = FocusNode();
-  late final PriceTracker priceTracker;
-  List<Product> products = [];
-  List<Board> boards = [];
-  List<Tag> tags = [];
-  bool ready = false;
-  bool importing = false;
-  bool refreshingPrices = false;
-  bool searchActive = false;
-  String query = '';
-  String? selectedBoardFilter;
-  String? selectedSource;
-  SortMode sort = SortMode.newest;
-  LayoutMode layout = LayoutMode.masonry;
-  late final Future<void> _loadFuture;
+class _ArchiveScreenState extends State<ArchiveScreen> {
+  final _normalizer = UrlNormalizer();
+  List<ArchiveItem> items = const [];
+  List<Category> categories = const [];
+  String? categoryId;
+  bool loading = true;
+  bool selectionMode = false;
+  final selected = <String>{};
 
   @override
   void initState() {
     super.initState();
-    priceTracker = PriceTracker(repository: widget.repository);
-    _loadFuture = _load();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _consumeIncoming());
-    WidgetsBinding.instance.addPostFrameCallback((_) => _refreshPrices(showSummary: false));
+    _reload();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _consumeShare());
   }
 
   @override
-  void dispose() {
-    searchController.dispose();
-    searchFocus.dispose();
-    super.dispose();
-  }
-
-  @override
-  void didUpdateWidget(covariant HomeScreen oldWidget) {
+  void didUpdateWidget(covariant ArchiveScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.sharedPayload != null && widget.sharedPayload != oldWidget.sharedPayload) _consumeIncoming();
+    if (widget.sharedData != null && widget.sharedData != oldWidget.sharedData) _consumeShare();
   }
 
-  Future<void> _load() async {
-    final loadedProducts = await widget.repository.getProducts();
-    final loadedBoards = await widget.repository.getBoards();
-    final loadedTags = await widget.repository.getTags();
+  Future<void> _reload() async {
+    if (mounted) setState(() => loading = true);
+    final loadedCategories = await widget.repository.getCategories();
+    final loadedItems = await widget.repository.getItems(categoryId: categoryId);
     if (!mounted) return;
     setState(() {
-      products = loadedProducts;
-      boards = loadedBoards;
-      tags = loadedTags;
-      ready = true;
+      categories = loadedCategories;
+      items = loadedItems;
+      loading = false;
+      selected.removeWhere((id) => !loadedItems.any((item) => item.id == id));
     });
   }
 
-  Future<void> _consumeIncoming() async {
-    await _loadFuture;
-    if (!mounted) return;
-    final payload = widget.sharedPayload;
-    final url = payload?.url;
-    if (url == null || url.isEmpty || importing) return;
-    widget.consumeSharedPayload();
-    await _addUrl(url, sharedTitle: payload?.title, sharedImagePath: payload?.imagePath);
+  Future<void> _consumeShare() async {
+    final data = widget.sharedData;
+    if (data == null) return;
+    final url = data['url']?.toString().trim();
+    if (url == null || url.isEmpty) return;
+    widget.consumeSharedData();
+    await _addUrl(url, initialTitle: data['title']?.toString().trim());
   }
 
-  Future<void> _addUrl(String raw, {String? sharedTitle, String? sharedImagePath}) async {
+  Future<void> _addUrl(String raw, {String? initialTitle, String? initialCategoryId}) async {
     final uri = Uri.tryParse(raw.trim());
-    if (uri == null || !uri.hasScheme || !{'http', 'https'}.contains(uri.scheme)) {
+    if (uri == null || !{'http', 'https'}.contains(uri.scheme.toLowerCase())) {
       _snack('Нужна ссылка http/https');
       return;
     }
-    final normalized = _normalize(uri.toString());
-    final duplicate = products.cast<Product?>().firstWhere((p) => p != null && _normalize(p.url) == normalized, orElse: () => null);
-    if (duplicate != null) {
-      await _openProduct(duplicate);
-      return;
-    }
-    setState(() => importing = true);
-    try {
-      final preview = await resolver.resolve(uri, sharedTitle: sharedTitle, sharedImageUri: sharedImagePath);
-      if (!mounted) return;
-      final selection = await _showSavePreview(preview);
-      if (selection == null) return;
-      final product = Product(
-        id: widget.repository.newId(),
-        url: uri.toString(),
-        source: _source(uri),
-        title: preview.title,
-        imageUrl: preview.imageUrl,
-        price: preview.price,
-        currency: preview.currency,
-        createdAt: DateTime.now(),
-        note: preview.description ?? '',
-        boardIds: selection.boardIds,
-      );
-      await widget.repository.upsertProduct(product);
-      if (!mounted) return;
-      setState(() => products = [product, ...products]);
-      await _rememberBoardSelection(selection.boardIds);
-      _snack('Товар сохранён');
-    } catch (_) {
-      if (mounted) _snack('Не удалось получить превью товара');
-    } finally {
-      if (mounted) setState(() => importing = false);
-    }
+    final duplicates = await widget.repository.findByNormalizedUrl(_normalizer.normalize(uri.toString()));
+    if (duplicates.isNotEmpty && !await _confirmDuplicate(duplicates)) return;
+
+    final now = DateTime.now();
+    final item = ArchiveItem(
+      id: widget.repository.newId(),
+      url: uri.toString(),
+      title: initialTitle?.isNotEmpty == true ? initialTitle! : '...',
+      titleSource: TitleSource.automatic,
+      imageStatus: ImageStatus.loading,
+      note: '',
+      categoryId: initialCategoryId ?? categoryId,
+      metadataStatus: MetadataStatus.loading,
+      createdAt: now,
+      updatedAt: now,
+    );
+    await widget.repository.upsertItem(item);
+    unawaited(widget.queue.enqueue(item));
+    await _reload();
+    await _openEditor(item);
   }
 
-  Future<_BoardSelection?> _showSavePreview(ProductPreview preview) async {
-    final prefs = await SharedPreferences.getInstance();
-    final lastBoardId = prefs.getString('last_board_id');
-    var selected = lastBoardId != null && boards.any((b) => b.id == lastBoardId) ? <String>[lastBoardId] : <String>[];
-    return showModalBottomSheet<_BoardSelection>(
-      context: context,
-      isScrollControlled: true,
-      useSafeArea: true,
-      showDragHandle: true,
-      backgroundColor: Theme.of(context).colorScheme.surface,
-      builder: (sheetContext) => StatefulBuilder(
-        builder: (context, setSheetState) => Padding(
-          padding: EdgeInsets.fromLTRB(16, 8, 16, 16 + MediaQuery.viewInsetsOf(context).bottom),
-          child: SingleChildScrollView(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Row(children: [
-                Expanded(child: Text('Добавить товар', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900))),
-                IconButton(onPressed: () => Navigator.pop(sheetContext), icon: const Icon(Icons.close_rounded)),
-              ]),
-              const SizedBox(height: 10),
-              SizedBox(
-                height: 220,
-                width: double.infinity,
-                child: Stack(fit: StackFit.expand, children: [
-                  if (preview.imageUrl != null || preview.localImageUri != null)
-                    ClipRRect(borderRadius: BorderRadius.circular(22), child: ProductPreviewImage(preview: preview))
-                  else
-                    Container(
-                      decoration: BoxDecoration(color: Theme.of(context).colorScheme.surfaceContainerHighest, borderRadius: BorderRadius.circular(22)),
-                      child: const Center(child: Icon(Icons.image_not_supported_outlined, size: 52)),
-                    ),
-                  Positioned(
-                    right: 8,
-                    top: 8,
-                    child: Material(
-                      color: Colors.black.withValues(alpha: .52),
-                      shape: const CircleBorder(),
-                      child: IconButton(
-                        tooltip: 'Диагностика изображения',
-                        icon: const Icon(Icons.bug_report_outlined, color: Colors.white),
-                        onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ImageDiagnosticsScreen())),
-                      ),
-                    ),
-                  ),
-                ]),
-              ),
-              const SizedBox(height: 14),
-              Text(preview.title, maxLines: 3, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 18, height: 1.16)),
-              const SizedBox(height: 5),
-              Row(children: [
-                if (preview.price != null) Text('${preview.price!.toStringAsFixed(0)} ${preview.currency}', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
-                const Spacer(),
-                Text(preview.siteName, style: Theme.of(context).textTheme.labelMedium?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant)),
-              ]),
-              if (preview.description != null && preview.description!.isNotEmpty) ...[
-                const SizedBox(height: 8),
-                Text(preview.description!, maxLines: 2, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.bodySmall),
-              ],
-              const SizedBox(height: 20),
-              Text('Сохранить в', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w900)),
-              const SizedBox(height: 8),
-              Wrap(spacing: 8, runSpacing: 8, children: [
-                ChoiceChip(label: const Text('Общее'), selected: selected.isEmpty, onSelected: (_) => setSheetState(() => selected = [])),
-                ...boards.map((board) => FilterChip(label: Text(board.name), selected: selected.contains(board.id), onSelected: (value) => setSheetState(() => selected = value ? [...selected.where((id) => id != board.id), board.id] : selected.where((id) => id != board.id).toList()))),
-              ]),
-              const SizedBox(height: 18),
-              SizedBox(width: double.infinity, child: FilledButton(onPressed: () => Navigator.pop(sheetContext, _BoardSelection(List.unmodifiable(selected))), style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(17))), child: const Text('Сохранить товар'))),
-            ]),
+  Future<bool> _confirmDuplicate(List<ArchiveItem> duplicates) async {
+    final locations = duplicates.map((item) {
+      if (item.categoryId == null) return '• Неразобранное';
+      final category = categories.where((c) => c.id == item.categoryId).firstOrNull;
+      return '• ${category == null ? 'Подборка' : '«${category.name}»'}';
+    }).join('\n');
+    return (await showDialog<bool>(
+          context: context,
+          builder: (_) => AlertDialog(
+            title: const Text('Эта ссылка уже есть'),
+            content: Text('$locations\n\nСоздать новый независимый объект?'),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Отменить сохранение')),
+              FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Всё равно сохранить')),
+            ],
           ),
-        ),
+        )) ??
+        false;
+  }
+
+  Future<void> _openEditor(ArchiveItem item) async {
+    final result = await Navigator.push<ArchiveItem>(context, MaterialPageRoute(builder: (_) => EditArchiveItemPage(repository: widget.repository, queue: widget.queue, item: item)));
+    if (!mounted) return;
+    if (result != null) {
+      await widget.repository.upsertItem(result);
+      unawaited(widget.queue.enqueue(result));
+    }
+    await _reload();
+  }
+
+  Future<void> _openDetail(ArchiveItem item) async {
+    final result = await Navigator.push<ArchiveItem>(context, MaterialPageRoute(builder: (_) => ArchiveItemPage(repository: widget.repository, queue: widget.queue, item: item, categories: categories)));
+    if (result != null) {
+      await widget.repository.upsertItem(result);
+      unawaited(widget.queue.enqueue(result));
+    }
+    await _reload();
+  }
+
+  Future<void> _createCategory() async {
+    final controller = TextEditingController();
+    final raw = await showDialog<String>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Новая подборка'),
+        content: TextField(controller: controller, autofocus: true, decoration: const InputDecoration(labelText: 'Название')),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Отмена')),
+          FilledButton(onPressed: () => Navigator.pop(context, controller.text), child: const Text('Создать')),
+        ],
       ),
     );
-  }
-
-  Future<void> _rememberBoardSelection(List<String> boardIds) async {
-    final prefs = await SharedPreferences.getInstance();
-    if (boardIds.isEmpty) {
-      await prefs.remove('last_board_id');
-    } else {
-      await prefs.setString('last_board_id', boardIds.first);
+    controller.dispose();
+    final name = raw?.trim() ?? '';
+    if (name.isEmpty) return;
+    if (await widget.repository.findCategoryByName(name) != null) {
+      _snack('Такая подборка уже существует');
+      return;
     }
+    final now = DateTime.now();
+    await widget.repository.upsertCategory(Category(id: widget.repository.newId(), name: name, createdAt: now, updatedAt: now));
+    await _reload();
   }
 
-  String _normalize(String value) => (Uri.tryParse(value)?.replace(query: '', fragment: '').toString() ?? value).replaceAll(RegExp(r'/$'), '').toLowerCase();
-
-  String _source(Uri uri) {
-    final host = uri.host.toLowerCase();
-    if (host.contains('ozon')) return 'OZON';
-    if (host.contains('wildberries')) return 'Wildberries';
-    if (host.contains('market.yandex')) return 'Яндекс Маркет';
-    if (host.contains('avito')) return 'Avito';
-    if (host.contains('amazon')) return 'Amazon';
-    return host.isEmpty ? 'Другое' : host;
-  }
-
-  String _tagNames(Product product) {
-    final byId = {for (final tag in tags) tag.id: tag};
-    return product.tagIds.map((id) => byId[id]?.name ?? '').where((name) => name.isNotEmpty).join(' ');
-  }
-
-  List<String> get sources {
-    final values = products.map((p) => p.source.trim()).where((s) => s.isNotEmpty).toSet().toList();
-    values.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
-    return values;
-  }
-
-  List<Product> get visible {
-    Iterable<Product> out = products;
-    if (selectedSource != null) out = out.where((p) => p.source == selectedSource);
-    if (selectedBoardFilter == _commonBoardFilter) {
-      out = out.where((p) => p.boardIds.isEmpty);
-    } else if (selectedBoardFilter != null) {
-      out = out.where((p) => p.boardIds.contains(selectedBoardFilter));
+  Future<void> _renameCategory(Category category) async {
+    final controller = TextEditingController(text: category.name);
+    final raw = await showDialog<String>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Переименовать подборку'),
+        content: TextField(controller: controller, autofocus: true),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Отмена')),
+          FilledButton(onPressed: () => Navigator.pop(context, controller.text), child: const Text('Сохранить')),
+        ],
+      ),
+    );
+    controller.dispose();
+    final name = raw?.trim() ?? '';
+    if (name.isEmpty) return;
+    final existing = await widget.repository.findCategoryByName(name);
+    if (existing != null && existing.id != category.id) {
+      _snack('Такая подборка уже существует');
+      return;
     }
-    final q = query.trim().toLowerCase();
-    if (q.isNotEmpty) out = out.where((p) => '${p.title} ${p.source} ${p.note} ${_tagNames(p)}'.toLowerCase().contains(q));
-    final list = out.toList();
-    switch (sort) {
-      case SortMode.newest: list.sort((a, b) => b.createdAt.compareTo(a.createdAt));
-      case SortMode.oldest: list.sort((a, b) => a.createdAt.compareTo(b.createdAt));
-      case SortMode.priceUp: list.sort((a, b) => (a.price ?? double.infinity).compareTo(b.price ?? double.infinity));
-      case SortMode.priceDown: list.sort((a, b) => (b.price ?? -1).compareTo(a.price ?? -1));
-      case SortMode.name: list.sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
-      case SortMode.priority: list.sort((a, b) => b.priority.compareTo(a.priority));
-    }
-    return list;
+    await widget.repository.upsertCategory(category.copyWith(name: name, updatedAt: DateTime.now()));
+    await _reload();
   }
 
-  Future<void> _openProduct(Product product) async {
-    await Navigator.of(context).push(MaterialPageRoute(builder: (_) => ProductDetailScreen(product: product, tags: tags, repository: widget.repository)));
-    await _load();
-  }
-
-  Future<void> _showSortMenu() async {
-    final selected = await showModalBottomSheet<SortMode>(
-      context: context,
-      showDragHandle: true,
-      builder: (sheetContext) => SafeArea(child: Column(mainAxisSize: MainAxisSize.min, children: [
-        const ListTile(title: Text('Сортировка', style: TextStyle(fontWeight: FontWeight.w900))),
-        ...SortMode.values.map((mode) => ListTile(title: Text(switch (mode) { SortMode.newest => 'Новые', SortMode.oldest => 'Старые', SortMode.priceUp => 'Цена ↑', SortMode.priceDown => 'Цена ↓', SortMode.name => 'По названию', SortMode.priority => 'Приоритет' }), trailing: sort == mode ? const Icon(Icons.check_rounded) : null, onTap: () => Navigator.pop(sheetContext, mode))),
-        const SizedBox(height: 8),
-      ])),
-    );
-    if (selected != null && mounted) setState(() => sort = selected);
-  }
-
-  Future<void> _showSourceMenu() async {
-    final selected = await showModalBottomSheet<String?>(
-      context: context,
-      showDragHandle: true,
-      builder: (sheetContext) => SafeArea(child: Column(mainAxisSize: MainAxisSize.min, children: [
-        const ListTile(title: Text('Магазин', style: TextStyle(fontWeight: FontWeight.w900))),
-        ListTile(title: const Text('Все магазины'), trailing: selectedSource == null ? const Icon(Icons.check_rounded) : null, onTap: () => Navigator.pop(sheetContext, '')),
-        ...sources.map((source) => ListTile(title: Text(source), trailing: selectedSource == source ? const Icon(Icons.check_rounded) : null, onTap: () => Navigator.pop(sheetContext, source))),
-        const SizedBox(height: 8),
-      ])),
-    );
-    if (selected != null && mounted) setState(() => selectedSource = selected.isEmpty ? null : selected);
-  }
-
-  Future<void> _showProductMenu(Product product) async {
-    final choice = await showModalBottomSheet<String>(
-      context: context,
-      showDragHandle: true,
-      builder: (sheetContext) => SafeArea(child: Column(mainAxisSize: MainAxisSize.min, children: [
-        Padding(padding: const EdgeInsets.fromLTRB(20, 4, 20, 10), child: Align(alignment: Alignment.centerLeft, child: Text(product.title, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800)))),
-        ListTile(leading: const Icon(Icons.edit_outlined), title: const Text('Изменить'), onTap: () => Navigator.pop(sheetContext, 'edit')),
-        ListTile(leading: const Icon(Icons.open_in_new_outlined), title: const Text('Открыть на сайте'), onTap: () => Navigator.pop(sheetContext, 'open')),
-        ListTile(leading: const Icon(Icons.drive_file_move_outlined), title: const Text('Переместить в доску'), onTap: () => Navigator.pop(sheetContext, 'move')),
-        ListTile(leading: const Icon(Icons.delete_outline_rounded), title: const Text('Удалить'), onTap: () => Navigator.pop(sheetContext, 'delete')),
-        const SizedBox(height: 8),
-      ])),
-    );
-    switch (choice) {
-      case 'edit': await _editProduct(product);
-      case 'open':
-        final uri = Uri.tryParse(product.url);
-        if (uri != null) await launchUrl(uri, mode: LaunchMode.externalApplication);
-      case 'move': await _moveProduct(product);
-      case 'delete': await _deleteProduct(product);
-    }
-  }
-
-  Future<void> _moveProduct(Product product) async {
-    var selected = [...product.boardIds];
-    final result = await showModalBottomSheet<List<String>>(
-      context: context,
-      showDragHandle: true,
-      isScrollControlled: true,
-      builder: (sheetContext) => StatefulBuilder(builder: (context, setSheetState) => SafeArea(child: Padding(padding: const EdgeInsets.all(16), child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text('Переместить товар', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900)),
-        const SizedBox(height: 12),
-        Wrap(spacing: 8, runSpacing: 8, children: [
-          ChoiceChip(label: const Text('Общее'), selected: selected.isEmpty, onSelected: (_) => setSheetState(() => selected = [])),
-          ...boards.map((board) => FilterChip(label: Text(board.name), selected: selected.contains(board.id), onSelected: (value) => setSheetState(() => selected = value ? [...selected.where((id) => id != board.id), board.id] : selected.where((id) => id != board.id).toList()))),
-        ]),
-        const SizedBox(height: 16),
-        SizedBox(width: double.infinity, child: FilledButton(onPressed: () => Navigator.pop(sheetContext, List.unmodifiable(selected)), child: const Text('Сохранить'))),
-      ])))),
-    );
-    if (result == null) return;
-    final updated = product.copyWith(boardIds: result);
-    await widget.repository.upsertProduct(updated);
-    if (mounted) setState(() => products = products.map((p) => p.id == updated.id ? updated : p).toList());
-  }
-
-  Future<void> _editProduct(Product product) async {
-    final updated = await showModalBottomSheet<Product>(context: context, isScrollControlled: true, showDragHandle: true, builder: (_) => ProductEditor(product: product, boards: boards, tags: tags, repository: widget.repository));
-    if (updated == null) return;
-    await widget.repository.upsertProduct(updated);
-    if (mounted) setState(() => products = products.map((p) => p.id == updated.id ? updated : p).toList());
-  }
-
-  Future<void> _deleteProduct(Product product) async {
+  Future<void> _deleteCategory(Category category) async {
+    final count = (await widget.repository.getItems(categoryId: category.id)).length;
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
-        title: const Text('Удалить товар?'),
-        content: Text(product.title),
+        title: Text('Удалить подборку «${category.name}»?'),
+        content: Text('$count ссылок будут перемещены в Неразобранное.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Отмена')),
           FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Удалить')),
@@ -469,292 +251,314 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
     if (ok != true) return;
-    await widget.repository.deleteProduct(product.id);
-    if (mounted) setState(() => products.removeWhere((p) => p.id == product.id));
+    await widget.repository.deleteCategory(category.id);
+    if (categoryId == category.id) categoryId = null;
+    await _reload();
   }
 
-  Future<void> _createBoard() async {
-    final controller = TextEditingController();
-    final name = await showDialog<String>(
+  Future<String?> _pickCategory({String? excluded}) async {
+    final value = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (_) => SafeArea(child: Column(mainAxisSize: MainAxisSize.min, children: [
+        const ListTile(title: Text('Выбрать подборку', style: TextStyle(fontWeight: FontWeight.w800))),
+        ListTile(title: const Text('Не выбирать'), onTap: () => Navigator.pop(context, '__none__')),
+        ...categories.where((c) => c.id != excluded).map((c) => ListTile(title: Text(c.name), onTap: () => Navigator.pop(context, c.id))),
+        ListTile(leading: const Icon(Icons.add), title: const Text('+ Создать подборку'), onTap: () => Navigator.pop(context, '__create__')),
+      ])),
+    );
+    if (value == null) return '__cancel__';
+    if (value == '__create__') {
+      await _createCategory();
+      await _reload();
+      return _pickCategory(excluded: excluded);
+    }
+    return value == '__none__' ? null : value;
+  }
+
+  Future<void> _moveOne(ArchiveItem item) async {
+    final target = await _pickCategory(excluded: item.categoryId);
+    if (target == '__cancel__' || target == item.categoryId) return;
+    await widget.repository.upsertItem(item.copyWith(categoryId: target, updatedAt: DateTime.now()));
+    await _reload();
+    _snack(target == null ? 'Перемещено в Неразобранное' : 'Перемещено');
+  }
+
+  Future<void> _bulkMove() async {
+    if (selected.isEmpty) return;
+    final target = await _pickCategory(excluded: categoryId);
+    if (target == '__cancel__' || target == categoryId) return;
+    final count = selected.length;
+    await widget.repository.assignCategory(selected, target);
+    selected.clear();
+    selectionMode = false;
+    await _reload();
+    _snack('$count ${_plural(count, 'ссылка', 'ссылки', 'ссылок')} перемещено');
+  }
+
+  Future<void> _bulkDelete() async {
+    if (selected.isEmpty) return;
+    final count = selected.length;
+    final ok = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
-        title: const Text('Новая доска'),
-        content: TextField(controller: controller, autofocus: true, decoration: const InputDecoration(hintText: 'Например, Мастерская')),
+        title: Text('Удалить $count ${_plural(count, 'ссылку', 'ссылки', 'ссылок')}?'),
+        content: const Text('Объекты будут удалены из архива.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Отмена')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Удалить')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    await widget.repository.deleteItems(selected);
+    selected.clear();
+    selectionMode = false;
+    await _reload();
+  }
+
+  Future<void> _addDialog() async {
+    final controller = TextEditingController();
+    final raw = await showDialog<String>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Добавить ссылку'),
+        content: TextField(controller: controller, autofocus: true, keyboardType: TextInputType.url, decoration: const InputDecoration(hintText: 'Вставьте ссылку...')),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context), child: const Text('Отмена')),
-          FilledButton(onPressed: () => Navigator.pop(context, controller.text.trim()), child: const Text('Создать')),
+          FilledButton(onPressed: () => Navigator.pop(context, controller.text), child: const Text('Добавить')),
         ],
       ),
     );
     controller.dispose();
-    if (name == null || name.isEmpty) return;
-    final board = Board(id: widget.repository.newId(), name: name, createdAt: DateTime.now(), sortOrder: boards.length);
-    await widget.repository.upsertBoard(board);
-    if (mounted) setState(() => boards.add(board));
+    final value = raw?.trim() ?? '';
+    if (value.isNotEmpty) await _addUrl(value);
   }
 
-  Future<void> _refreshPrices({bool showSummary = false}) async {
-    if (refreshingPrices) return;
-    await _loadFuture;
-    if (!mounted) return;
-    final active = products.where((p) => p.status == ProductStatus.wishlist || p.status == ProductStatus.considering).toList();
-    if (active.isEmpty) {
-      if (showSummary) _snack('Нет товаров для обновления цен');
-      return;
+  String _plural(int n, String one, String few, String many) {
+    final x = n.abs() % 100;
+    if (x >= 11 && x <= 14) return many;
+    switch (x % 10) {
+      case 1: return one;
+      case 2:
+      case 3:
+      case 4: return few;
+      default: return many;
     }
-    setState(() => refreshingPrices = true);
-    var updated = 0;
-    var failed = 0;
-    const batch = 3;
-    for (var i = 0; i < active.length; i += batch) {
-      final chunk = active.skip(i).take(batch).toList();
-      final results = await Future.wait(chunk.map((product) => priceTracker.updatePrice(product)));
-      for (final result in results) {
-        if (result.status == PriceUpdateStatus.updated) updated++;
-        if (result.status == PriceUpdateStatus.failed) failed++;
-      }
-    }
-    if (!mounted) return;
-    setState(() => refreshingPrices = false);
-    await _load();
-    if (showSummary) _snack(updated == 0 && failed == 0 ? 'Цены не изменились' : 'Обновлено цен: $updated, ошибок: $failed');
   }
 
-  String _themeLabel() => switch (widget.themeMode) {
-        ThemeMode.system => 'Системная',
-        ThemeMode.light => 'Светлая',
-        ThemeMode.dark => 'Тёмная',
-      };
+  void _snack(String text) => ScaffoldMessenger.of(context)..hideCurrentSnackBar()..showSnackBar(SnackBar(content: Text(text)));
 
-  Future<void> _chooseTheme() async {
-    final selected = await showDialog<ThemeMode>(
-      context: context,
-      builder: (_) => SimpleDialog(
-        title: const Text('Тема оформления'),
-        children: [
-          SimpleDialogOption(onPressed: () => Navigator.pop(context, ThemeMode.system), child: const ListTile(leading: Icon(Icons.brightness_auto_outlined), title: Text('Системная'))),
-          SimpleDialogOption(onPressed: () => Navigator.pop(context, ThemeMode.light), child: const ListTile(leading: Icon(Icons.light_mode_outlined), title: Text('Светлая'))),
-          SimpleDialogOption(onPressed: () => Navigator.pop(context, ThemeMode.dark), child: const ListTile(leading: Icon(Icons.dark_mode_outlined), title: Text('Тёмная'))),
+  @override
+  Widget build(BuildContext context) {
+    final title = categoryId == null ? 'Неразобранное' : categories.where((c) => c.id == categoryId).firstOrNull?.name ?? 'Подборка';
+    return Scaffold(
+      appBar: AppBar(
+        leading: selectionMode ? IconButton(onPressed: () => setState(() { selectionMode = false; selected.clear(); }), icon: const Icon(Icons.close)) : null,
+        title: selectionMode ? Text('Выбрано: ${selected.length}') : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [const Text('Мой архив', style: TextStyle(fontWeight: FontWeight.w900)), Text(title, style: Theme.of(context).textTheme.labelMedium)]),
+        actions: [
+          if (!selectionMode) IconButton(tooltip: 'Сортировать', onPressed: () => setState(() => selectionMode = true), icon: const Icon(Icons.checklist_outlined)),
+          Builder(builder: (context) => IconButton(tooltip: 'Подборки', onPressed: () => Scaffold.of(context).openDrawer(), icon: const Icon(Icons.menu))),
         ],
       ),
+      drawer: Drawer(child: SafeArea(child: ListView(padding: const EdgeInsets.all(12), children: [
+        const Padding(padding: EdgeInsets.all(12), child: Text('Подборки', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900))),
+        ListTile(leading: const Icon(Icons.inbox_outlined), title: const Text('Неразобранное'), selected: categoryId == null, onTap: () { Navigator.pop(context); setState(() => categoryId = null); _reload(); }),
+        const Divider(),
+        ...categories.map((c) => ListTile(
+              leading: const Icon(Icons.folder_outlined), title: Text(c.name), selected: categoryId == c.id,
+              onTap: () { Navigator.pop(context); setState(() => categoryId = c.id); _reload(); },
+              trailing: PopupMenuButton<String>(onSelected: (v) { if (v == 'rename') _renameCategory(c); if (v == 'delete') _deleteCategory(c); }, itemBuilder: (_) => const [PopupMenuItem(value: 'rename', child: Text('Переименовать')), PopupMenuItem(value: 'delete', child: Text('Удалить'))]),
+            )),
+        const Divider(),
+        ListTile(leading: const Icon(Icons.add), title: const Text('Создать подборку'), onTap: () { Navigator.pop(context); _createCategory(); }),
+      ]))),
+      floatingActionButtonLocation: FloatingActionButtonLocation.startFloat,
+      floatingActionButton: selectionMode ? null : FloatingActionButton.extended(onPressed: _addDialog, icon: const Icon(Icons.add), label: const Text('Добавить ссылку')),
+      bottomNavigationBar: selectionMode && selected.isNotEmpty ? SafeArea(child: Padding(padding: const EdgeInsets.all(10), child: Row(children: [Expanded(child: OutlinedButton.icon(onPressed: _bulkDelete, icon: const Icon(Icons.delete_outline), label: const Text('Удалить'))), const SizedBox(width: 8), Expanded(child: FilledButton.icon(onPressed: _bulkMove, icon: const Icon(Icons.drive_file_move_outline), label: Text(categoryId == null ? 'В подборку' : 'Переместить')))]))) : null,
+      body: loading
+          ? const Center(child: CircularProgressIndicator())
+          : items.isEmpty
+              ? _empty(title)
+              : RefreshIndicator(
+                  onRefresh: _reload,
+                  child: GridView.builder(
+                    padding: const EdgeInsets.fromLTRB(12, 12, 12, 100),
+                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, crossAxisSpacing: 12, mainAxisSpacing: 12, childAspectRatio: .74),
+                    itemCount: items.length,
+                    itemBuilder: (_, i) {
+                      final item = items[i];
+                      return ArchiveCard(item: item, selected: selected.contains(item.id), selectionMode: selectionMode, onTap: () {
+                        if (selectionMode) {
+                          setState(() => selected.contains(item.id) ? selected.remove(item.id) : selected.add(item.id));
+                        } else {
+                          _openDetail(item);
+                        }
+                      }, onAction: () => _moveOne(item));
+                    },
+                  ),
+                ),
     );
-    if (selected != null) await widget.onThemeModeChanged(selected);
   }
 
-  Future<void> _settings() async {
-    await showModalBottomSheet(
-      context: context,
-      showDragHandle: true,
-      builder: (_) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const ListTile(title: Text('Настройки', style: TextStyle(fontWeight: FontWeight.w800))),
-            ListTile(leading: const Icon(Icons.palette_outlined), title: const Text('Тема оформления'), trailing: Text(_themeLabel()), onTap: () async { Navigator.pop(context); await _chooseTheme(); }),
-            ListTile(leading: const Icon(Icons.bug_report_outlined), title: const Text('Диагностика изображений'), onTap: () async { Navigator.pop(context); await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ImageDiagnosticsScreen())); }),
-            ListTile(leading: const Icon(Icons.upload_outlined), title: const Text('Поделиться резервной копией'), onTap: () async { Navigator.pop(context); await backupService.shareJson(await widget.repository.exportData()); }),
-            ListTile(leading: const Icon(Icons.download_outlined), title: const Text('Восстановить из буфера обмена'), onTap: () async {
-              Navigator.pop(context);
-              final text = (await Clipboard.getData(Clipboard.kTextPlain))?.text;
-              if (text == null) return;
-              try {
-                await widget.repository.importData(backupService.decode(text));
-                await _load();
-                if (mounted) _snack('Готово');
-              } catch (_) {
-                if (mounted) _snack('Некорректная резервная копия');
-              }
-            }),
-            Padding(padding: const EdgeInsets.fromLTRB(16, 0, 16, 20), child: Align(alignment: Alignment.centerLeft, child: Text('Только локальное хранение. Облачной синхронизации нет.', style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant)))),
-          ],
-        ),
-      ),
+  Widget _empty(String title) => Center(child: Padding(padding: const EdgeInsets.all(32), child: Column(mainAxisSize: MainAxisSize.min, children: [const Text('🐈', style: TextStyle(fontSize: 60)), const SizedBox(height: 12), Text(title == 'Неразобранное' ? 'Неразобранное пусто' : 'В этой подборке пока нет ссылок', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900), textAlign: TextAlign.center), const SizedBox(height: 8), const Text('Сохраняйте ссылки через кнопку ниже или через Поделиться.', textAlign: TextAlign.center, style: TextStyle(color: Colors.black54))])));
+}
+
+class ArchiveCard extends StatelessWidget {
+  const ArchiveCard({super.key, required this.item, required this.onTap, required this.onAction, required this.selected, required this.selectionMode});
+  final ArchiveItem item;
+  final VoidCallback onTap;
+  final VoidCallback onAction;
+  final bool selected;
+  final bool selectionMode;
+
+  ImageProvider<Object>? get _provider {
+    final value = item.imageUrl;
+    if (value == null || value.isEmpty) return null;
+    final uri = Uri.tryParse(value);
+    if (uri?.scheme == 'file') return FileImage(File(uri!.toFilePath()));
+    return NetworkImage(value);
+  }
+
+  @override
+  Widget build(BuildContext context) => Material(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(onTap: onTap, child: Stack(children: [
+          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Expanded(child: _image()), Padding(padding: const EdgeInsets.fromLTRB(12, 10, 44, 12), child: Text(item.title, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800))) ]),
+          if (!selectionMode) Positioned(right: 2, bottom: 2, child: IconButton(onPressed: onAction, icon: const Icon(Icons.north_east), tooltip: 'Переместить')),
+          if (selectionMode) Positioned(top: 10, right: 10, child: Container(width: 28, height: 28, decoration: BoxDecoration(color: selected ? Colors.black : Colors.white70, shape: BoxShape.circle, border: Border.all(color: Colors.black38)), child: selected ? const Icon(Icons.check, size: 18, color: Colors.white) : null)),
+          if (item.metadataStatus == MetadataStatus.loading) const Positioned(left: 10, top: 10, child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))),
+        ])),
+      );
+
+  Widget _image() {
+    final provider = _provider;
+    if (provider == null) return Container(color: const Color(0xffecece9), alignment: Alignment.center, child: const Text('🐈', style: TextStyle(fontSize: 52)));
+    return Image(image: provider, fit: BoxFit.cover, width: double.infinity, errorBuilder: (_, __, ___) => Container(color: const Color(0xffecece9), alignment: Alignment.center, child: const Text('🐈', style: TextStyle(fontSize: 52))));
+  }
+}
+
+class ArchiveItemPage extends StatelessWidget {
+  const ArchiveItemPage({super.key, required this.repository, required this.queue, required this.item, required this.categories});
+  final ArchiveRepository repository;
+  final MetadataQueue queue;
+  final ArchiveItem item;
+  final List<Category> categories;
+
+  @override
+  Widget build(BuildContext context) {
+    final provider = _imageProvider(item.imageUrl);
+    return Scaffold(
+      appBar: AppBar(title: const Text('Ссылка'), actions: [IconButton(onPressed: () => _move(context), icon: const Icon(Icons.north_east)), IconButton(onPressed: () => _edit(context), icon: const Icon(Icons.edit_outlined))]),
+      body: ListView(padding: const EdgeInsets.all(16), children: [
+        ClipRRect(borderRadius: BorderRadius.circular(20), child: provider == null ? _placeholder(340) : Image(image: provider, height: 340, fit: BoxFit.cover, errorBuilder: (_, __, ___) => _placeholder(340))),
+        const SizedBox(height: 18),
+        Text(item.title, style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800)),
+        if (item.note.isNotEmpty) ...[const SizedBox(height: 22), const Text('Заметка', style: TextStyle(fontWeight: FontWeight.w800)), const SizedBox(height: 6), Text(item.note)],
+        const SizedBox(height: 18),
+        ListTile(contentPadding: EdgeInsets.zero, leading: const Icon(Icons.folder_outlined), title: Text(item.categoryId == null ? 'Неразобранное' : categories.where((c) => c.id == item.categoryId).firstOrNull?.name ?? 'Подборка')),
+        ListTile(contentPadding: EdgeInsets.zero, leading: const Icon(Icons.link), title: Text(item.url, maxLines: 3, overflow: TextOverflow.ellipsis)),
+        const SizedBox(height: 12),
+        FilledButton.icon(onPressed: () => launchUrl(Uri.parse(item.url), mode: LaunchMode.externalApplication), icon: const Icon(Icons.open_in_new), label: const Text('Открыть')),
+        if (item.metadataStatus != MetadataStatus.success) const Padding(padding: EdgeInsets.only(top: 10), child: Text('Не все метаданные удалось получить автоматически. Ссылка сохранена.')),
+      ]),
     );
   }
 
-  void _activateSearch() {
-    setState(() {
-      searchActive = true;
-      searchController.text = query;
-      searchController.selection = TextSelection.fromPosition(TextPosition(offset: searchController.text.length));
-    });
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) searchFocus.requestFocus();
-    });
+  Future<void> _edit(BuildContext context) async {
+    final result = await Navigator.push<ArchiveItem>(context, MaterialPageRoute(builder: (_) => EditArchiveItemPage(repository: repository, queue: queue, item: item)));
+    if (context.mounted && result != null) Navigator.pop(context, result);
+    if (context.mounted && result == null && await repository.getItem(item.id) == null) Navigator.pop(context);
   }
 
-  void _closeSearch() {
-    setState(() {
-      searchActive = false;
-      query = searchController.text;
-    });
-    searchFocus.unfocus();
+  Future<void> _move(BuildContext context) async {
+    final value = await showModalBottomSheet<String>(context: context, showDragHandle: true, builder: (_) => SafeArea(child: Column(mainAxisSize: MainAxisSize.min, children: [const ListTile(title: Text('Переместить', style: TextStyle(fontWeight: FontWeight.w800))), if (item.categoryId != null) ListTile(title: const Text('Неразобранное'), onTap: () => Navigator.pop(context, '__none__')), ...categories.where((c) => c.id != item.categoryId).map((c) => ListTile(title: Text(c.name), onTap: () => Navigator.pop(context, c.id))) ])));
+    if (!context.mounted || value == null) return;
+    final updated = item.copyWith(categoryId: value == '__none__' ? null : value, updatedAt: DateTime.now());
+    await repository.upsertItem(updated);
+    if (context.mounted) Navigator.pop(context, updated);
+  }
+}
+
+class EditArchiveItemPage extends StatefulWidget {
+  const EditArchiveItemPage({super.key, required this.repository, required this.queue, required this.item});
+  final ArchiveRepository repository;
+  final MetadataQueue queue;
+  final ArchiveItem item;
+  @override
+  State<EditArchiveItemPage> createState() => _EditArchiveItemPageState();
+}
+
+class _EditArchiveItemPageState extends State<EditArchiveItemPage> {
+  late final titleController = TextEditingController(text: widget.item.title);
+  late final noteController = TextEditingController(text: widget.item.note);
+  String? categoryId;
+  bool titleTouched = false;
+  List<Category> categories = const [];
+
+  @override
+  void initState() { super.initState(); categoryId = widget.item.categoryId; _loadCategories(); }
+  Future<void> _loadCategories() async { final value = await widget.repository.getCategories(); if (mounted) setState(() => categories = value); }
+  @override
+  void dispose() { titleController.dispose(); noteController.dispose(); super.dispose(); }
+
+  Future<void> _chooseCategory() async {
+    final value = await showModalBottomSheet<String>(context: context, showDragHandle: true, builder: (_) => SafeArea(child: Column(mainAxisSize: MainAxisSize.min, children: [
+      const ListTile(title: Text('Выбрать подборку', style: TextStyle(fontWeight: FontWeight.w800))),
+      ListTile(title: const Text('Не выбирать'), onTap: () => Navigator.pop(context, '__none__')),
+      ...categories.map((c) => ListTile(title: Text(c.name), trailing: c.id == categoryId ? const Icon(Icons.check) : null, onTap: () => Navigator.pop(context, c.id))),
+    ])));
+    if (!mounted || value == null) return;
+    setState(() => categoryId = value == '__none__' ? null : value);
   }
 
-  void _snack(String message) => ScaffoldMessenger.of(context)..hideCurrentSnackBar()..showSnackBar(SnackBar(content: Text(message)));
+  Future<void> _save() async {
+    final entered = titleController.text.trim();
+    final manual = titleTouched || widget.item.titleSource == TitleSource.manual;
+    final result = widget.item.copyWith(title: entered.isEmpty ? 'Без названия' : entered, titleSource: manual ? TitleSource.manual : widget.item.titleSource, note: noteController.text.trim(), categoryId: categoryId, updatedAt: DateTime.now());
+    await widget.repository.upsertItem(result);
+    unawaited(widget.queue.enqueue(result));
+    if (mounted) Navigator.pop(context, result);
+  }
 
-  Widget _boardChip(String title, String? id, {bool common = false}) {
-    final scheme = Theme.of(context).colorScheme;
-    final selected = common ? selectedBoardFilter == _commonBoardFilter : selectedBoardFilter == id;
-    return InkWell(
-      borderRadius: BorderRadius.circular(999),
-      onTap: () => setState(() {
-        selectedBoardFilter = common ? _commonBoardFilter : id;
-        selectedSource = null;
-      }),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 160),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-        decoration: BoxDecoration(color: selected ? scheme.onSurface : scheme.surfaceContainerHighest, borderRadius: BorderRadius.circular(999)),
-        child: Text(title, style: TextStyle(color: selected ? scheme.surface : scheme.onSurface, fontWeight: selected ? FontWeight.w700 : FontWeight.w500, fontSize: 13)),
-      ),
-    );
+  Future<void> _delete() async {
+    final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(title: const Text('Удалить эту ссылку?'), content: const Text('Объект будет удалён из архива.'), actions: [TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Отмена')), FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Удалить'))]));
+    if (ok != true) return;
+    await widget.repository.deleteItem(widget.item.id);
+    if (mounted) Navigator.pop(context);
   }
 
   @override
   Widget build(BuildContext context) {
-    if (!ready) return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    final items = visible;
-    return Scaffold(
-      appBar: AppBar(
-        titleSpacing: 12,
-        leading: searchActive ? IconButton(tooltip: 'Закрыть поиск', onPressed: _closeSearch, icon: const Icon(Icons.arrow_back_rounded)) : null,
-        title: searchActive
-            ? TextField(
-                controller: searchController,
-                focusNode: searchFocus,
-                autofocus: true,
-                onChanged: (value) => setState(() => query = value),
-                decoration: InputDecoration(hintText: 'Найти товар', border: InputBorder.none, suffixIcon: query.isEmpty ? null : IconButton(onPressed: () { searchController.clear(); setState(() => query = ''); }, icon: const Icon(Icons.close_rounded))),
-              )
-            : const Text('Pinzon', style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: -.4)),
-        actions: searchActive
-            ? const []
-            : [
-                IconButton(tooltip: 'Поиск', onPressed: _activateSearch, icon: const Icon(Icons.search_rounded)),
-                PopupMenuButton<String>(
-                  icon: const Icon(Icons.more_horiz_rounded),
-                  itemBuilder: (_) => const [
-                    PopupMenuItem(value: 'sort', child: Text('Сортировка')),
-                    PopupMenuItem(value: 'source', child: Text('Магазин')),
-                    PopupMenuItem(value: 'layout', child: Text('Вид списка')),
-                    PopupMenuItem(value: 'refresh', child: Text('Обновить цены')),
-                    PopupMenuItem(value: 'diagnostics', child: Text('Диагностика изображений')),
-                    PopupMenuItem(value: 'settings', child: Text('Настройки')),
-                  ],
-                  onSelected: (value) {
-                    switch (value) {
-                      case 'sort': _showSortMenu();
-                      case 'source': _showSourceMenu();
-                      case 'layout': setState(() => layout = layout == LayoutMode.masonry ? LayoutMode.list : LayoutMode.masonry);
-                      case 'refresh': if (!refreshingPrices) _refreshPrices(showSummary: true);
-                      case 'diagnostics': Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ImageDiagnosticsScreen()));
-                      case 'settings': _settings();
-                    }
-                  },
-                ),
-              ],
-      ),
-      body: Column(
-        children: [
-          SizedBox(
-            height: 48,
-            child: ListView(
-              padding: const EdgeInsets.fromLTRB(16, 2, 16, 7),
-              scrollDirection: Axis.horizontal,
-              children: [
-                _boardChip('Все', null),
-                const SizedBox(width: 7),
-                _boardChip('Общее', _commonBoardFilter, common: true),
-                ...boards.map((board) => Padding(padding: const EdgeInsets.only(left: 7), child: _boardChip(board.name, board.id))),
-                Padding(padding: const EdgeInsets.only(left: 7), child: ActionChip(label: const Text('＋ Доска'), onPressed: _createBoard)),
-              ],
-            ),
-          ),
-          if (importing) const LinearProgressIndicator(minHeight: 2),
-          Expanded(
-            child: items.isEmpty
-                ? const Center(child: Padding(padding: EdgeInsets.symmetric(horizontal: 24), child: Text('Добавьте товар через кнопку + или поделитесь ссылкой из магазина.', textAlign: TextAlign.center)))
-                : layout == LayoutMode.masonry
-                    ? MasonryGridView.count(padding: const EdgeInsets.fromLTRB(14, 8, 14, 90), crossAxisCount: 2, mainAxisSpacing: 12, crossAxisSpacing: 12, itemCount: items.length, itemBuilder: (_, i) => ProductCard(product: items[i], onTap: () => _openProduct(items[i]), onLongPress: () => _showProductMenu(items[i])))
-                    : ListView.separated(padding: const EdgeInsets.fromLTRB(14, 8, 14, 90), itemCount: items.length, separatorBuilder: (_, index) => const SizedBox(height: 10), itemBuilder: (_, i) => ProductListTile(product: items[i], onTap: () => _openProduct(items[i]), onLongPress: () => _showProductMenu(items[i]))),
-          ),
-        ],
-      ),
-      floatingActionButton: FloatingActionButton(onPressed: _showAddDialog, child: const Icon(Icons.add_rounded)),
-    );
-  }
-
-  Future<void> _showAddDialog() async {
-    final controller = TextEditingController();
-    final url = await showModalBottomSheet<String>(
-      context: context,
-      showDragHandle: true,
-      isScrollControlled: true,
-      builder: (sheetContext) => Padding(
-        padding: EdgeInsets.fromLTRB(16, 8, 16, 18 + MediaQuery.viewInsetsOf(sheetContext).bottom),
-        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Text('Добавить товар', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 22)),
-          const SizedBox(height: 12),
-          TextField(controller: controller, autofocus: true, keyboardType: TextInputType.url, decoration: const InputDecoration(hintText: 'Вставьте ссылку на товар')),
-          const SizedBox(height: 14),
-          SizedBox(width: double.infinity, child: FilledButton(onPressed: () => Navigator.pop(sheetContext, controller.text.trim()), child: const Text('Продолжить'))),
-        ]),
-      ),
-    );
-    controller.dispose();
-    if (url != null && url.isNotEmpty) await _addUrl(url);
+    final provider = _imageProvider(widget.item.imageUrl);
+    final categoryName = categoryId == null ? 'Неразобранное' : categories.where((c) => c.id == categoryId).firstOrNull?.name ?? 'Подборка';
+    return Scaffold(appBar: AppBar(title: const Text('Редактировать')), body: ListView(padding: const EdgeInsets.all(16), children: [
+      ClipRRect(borderRadius: BorderRadius.circular(18), child: provider == null ? _placeholder(240) : Image(image: provider, height: 240, fit: BoxFit.cover, errorBuilder: (_, __, ___) => _placeholder(240))),
+      const SizedBox(height: 18),
+      TextField(controller: titleController, onChanged: (_) => titleTouched = true, decoration: const InputDecoration(labelText: 'Название', border: OutlineInputBorder())),
+      const SizedBox(height: 12),
+      TextField(controller: noteController, maxLines: 4, decoration: const InputDecoration(labelText: 'Заметка', border: OutlineInputBorder())),
+      const SizedBox(height: 12),
+      ListTile(contentPadding: EdgeInsets.zero, title: const Text('Подборка', style: TextStyle(fontWeight: FontWeight.w800)), subtitle: Text(categoryName), trailing: const Icon(Icons.chevron_right), onTap: _chooseCategory),
+      const SizedBox(height: 12),
+      FilledButton(onPressed: _save, child: const Text('Сохранить')),
+      const SizedBox(height: 8),
+      OutlinedButton(onPressed: _delete, child: const Text('Удалить')),
+    ]));
   }
 }
 
-class ProductEditor extends StatefulWidget {
-  const ProductEditor({super.key, required this.product, required this.boards, required this.tags, required this.repository});
-  final Product product;
-  final List<Board> boards;
-  final List<Tag> tags;
-  final ProductRepository repository;
-  @override
-  State<ProductEditor> createState() => _ProductEditorState();
+ImageProvider<Object>? _imageProvider(String? value) {
+  if (value == null || value.isEmpty) return null;
+  final uri = Uri.tryParse(value);
+  if (uri?.scheme == 'file') return FileImage(File(uri!.toFilePath()));
+  return NetworkImage(value);
 }
 
-class _ProductEditorState extends State<ProductEditor> {
-  late Product p;
-  late List<String> selectedBoardIds;
-  @override
-  void initState() {
-    super.initState();
-    p = widget.product;
-    selectedBoardIds = [...widget.product.boardIds];
-  }
-  @override
-  Widget build(BuildContext context) => DraggableScrollableSheet(
-        expand: false,
-        initialChildSize: .86,
-        maxChildSize: .95,
-        builder: (_, controller) => Material(
-          color: Theme.of(context).scaffoldBackgroundColor,
-          child: ListView(
-            controller: controller,
-            padding: const EdgeInsets.all(16),
-            children: [
-              TextField(decoration: const InputDecoration(labelText: 'Название'), controller: TextEditingController(text: p.title), onChanged: (v) => p = p.copyWith(title: v)),
-              const SizedBox(height: 10),
-              TextField(decoration: const InputDecoration(labelText: 'URL'), controller: TextEditingController(text: p.url), onChanged: (v) => p = p.copyWith(url: v)),
-              const SizedBox(height: 10),
-              TextField(decoration: const InputDecoration(labelText: 'Цена'), keyboardType: TextInputType.number, controller: TextEditingController(text: p.price?.toStringAsFixed(0) ?? ''), onChanged: (v) => p = p.copyWith(price: double.tryParse(v.replaceAll(',', '.')))),
-              const SizedBox(height: 14),
-              const Text('Доски', style: TextStyle(fontWeight: FontWeight.w800)),
-              const SizedBox(height: 8),
-              Wrap(spacing: 8, runSpacing: 8, children: [
-                FilterChip(label: const Text('Общее'), selected: selectedBoardIds.isEmpty, onSelected: (_) => setState(() => selectedBoardIds = [])),
-                ...widget.boards.map((board) => FilterChip(label: Text(board.name), selected: selectedBoardIds.contains(board.id), onSelected: (value) => setState(() => selectedBoardIds = value ? [...selectedBoardIds.where((id) => id != board.id), board.id] : selectedBoardIds.where((id) => id != board.id).toList()))),
-              ]),
-              const SizedBox(height: 14),
-              TextField(decoration: const InputDecoration(labelText: 'Заметка'), maxLines: 4, controller: TextEditingController(text: p.note), onChanged: (v) => p = p.copyWith(note: v)),
-              const SizedBox(height: 14),
-              FilledButton(onPressed: () => Navigator.pop(context, p.copyWith(boardIds: selectedBoardIds)), child: const Text('Сохранить')),
-            ],
-          ),
-        ),
-      );
+Widget _placeholder(double height) => Container(height: height, color: const Color(0xffecece9), alignment: Alignment.center, child: const Text('🐈', style: TextStyle(fontSize: 64)));
+
+extension FirstOrNullExtension<E> on Iterable<E> {
+  E? get firstOrNull => isEmpty ? null : first;
 }
