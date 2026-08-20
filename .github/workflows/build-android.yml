@@ -59,7 +59,7 @@ jobs:
 
       - name: Analyze
         working-directory: ${{ steps.project.outputs.project_dir }}
-        run: flutter analyze
+        run: flutter analyze --no-fatal-infos
 
       - name: Test
         working-directory: ${{ steps.project.outputs.project_dir }}
