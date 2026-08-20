@@ -58,9 +58,7 @@ class LocalArchiveRepository implements ArchiveRepository {
             await db.insert('categories', {'id': category.id, 'data': jsonEncode(category.toJson())});
           }
           categoryMap[legacyId] = category.id;
-        } catch (_) {
-          // Best-effort migration: malformed legacy rows are ignored.
-        }
+        } catch (_) {}
       }
     }
 
@@ -89,14 +87,8 @@ class LocalArchiveRepository implements ArchiveRepository {
           createdAt: created,
           updatedAt: now,
         );
-        await db.insert('archive_items', {
-          'id': id,
-          'data': jsonEncode(item.toJson()),
-          'normalized_url': normalizer.normalize(url),
-        }, conflictAlgorithm: ConflictAlgorithm.ignore);
-      } catch (_) {
-        // Keep migration best-effort.
-      }
+        await db.insert('archive_items', {'id': id, 'data': jsonEncode(item.toJson()), 'normalized_url': normalizer.normalize(url)}, conflictAlgorithm: ConflictAlgorithm.ignore);
+      } catch (_) {}
     }
   }
 
@@ -118,7 +110,7 @@ class LocalArchiveRepository implements ArchiveRepository {
   @override
   Future<List<ArchiveItem>> getItems({String? categoryId}) async {
     final rows = categoryId == null
-        ? await _database.query('archive_items')
+        ? await _database.query('archive_items', where: "json_extract(data, '\$.categoryId') IS NULL")
         : await _database.query('archive_items', where: "json_extract(data, '\$.categoryId') = ?", whereArgs: [categoryId]);
     final items = rows.map((row) => ArchiveItem.fromJson(jsonDecode(row['data']! as String) as Map<String, dynamic>)).toList();
     items.sort((a, b) => b.createdAt.compareTo(a.createdAt));
@@ -138,13 +130,7 @@ class LocalArchiveRepository implements ArchiveRepository {
   }
 
   @override
-  Future<void> upsertItem(ArchiveItem item) async {
-    await _database.insert(
-      'archive_items',
-      {'id': item.id, 'data': jsonEncode(item.toJson()), 'normalized_url': normalizer.normalize(item.url)},
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
-  }
+  Future<void> upsertItem(ArchiveItem item) async => _database.insert('archive_items', {'id': item.id, 'data': jsonEncode(item.toJson()), 'normalized_url': normalizer.normalize(item.url)}, conflictAlgorithm: ConflictAlgorithm.replace);
 
   @override
   Future<void> deleteItem(String id) async => _database.delete('archive_items', where: 'id = ?', whereArgs: [id]);
@@ -188,11 +174,7 @@ class LocalArchiveRepository implements ArchiveRepository {
   Future<Category?> findCategoryByName(String name) => _findCategoryByNameIn(_database, name);
 
   @override
-  Future<void> upsertCategory(Category category) async => _database.insert(
-        'categories',
-        {'id': category.id, 'data': jsonEncode(category.toJson())},
-        conflictAlgorithm: ConflictAlgorithm.replace,
-      );
+  Future<void> upsertCategory(Category category) async => _database.insert('categories', {'id': category.id, 'data': jsonEncode(category.toJson())}, conflictAlgorithm: ConflictAlgorithm.replace);
 
   @override
   Future<void> deleteCategory(String id) async {
