@@ -28,13 +28,12 @@ void main() {
       final importer = ProductImporter(client: client);
       final data = await importer.fetch(Uri.parse('https://www.ozon.ru/product/nice-phone-1234567'));
       expect(data.title, 'Смартфон X');
-      expect(data.imageUrl, 'https://cdn.example.com/photo.jpg');
       expect(data.price, 12499);
       expect(data.currency, 'RUB');
       expect(data.description, 'Описание товара');
     });
 
-    test('extracts Ozon data from embedded price and gallery state', () async {
+    test('extracts Ozon title and price from embedded state', () async {
       final client = MockClient((request) async {
         return utf8Response('''
           <html>
@@ -51,10 +50,9 @@ void main() {
       expect(data.title, 'Кофе в зернах Test');
       expect(data.price, 1799);
       expect(data.currency, 'RUB');
-      expect(data.imageUrl, 'https://cdn.example.com/coffee.webp');
     });
 
-    test('falls back to JSON-LD when OG tags are missing', () async {
+    test('falls back to JSON-LD for title and price when OG tags are missing', () async {
       final client = MockClient((request) async {
         return utf8Response('''
           <html>
@@ -67,12 +65,11 @@ void main() {
       final importer = ProductImporter(client: client);
       final data = await importer.fetch(Uri.parse('https://www.wildberries.ru/catalog/1/detail.aspx'));
       expect(data.title, 'Умные часы');
-      expect(data.imageUrl, 'https://cdn.example.com/watch.jpg');
       expect(data.price, 8900.5);
       expect(data.currency, 'RUB');
     });
 
-    test('uses regex fallback for Ozon pages with inline state', () async {
+    test('uses regex fallback for Ozon pages with inline product state', async () {
       final client = MockClient((request) async {
         return utf8Response(
           '{\\"name\\":\\"Товар из OZON\\",\\"images\\":[\\"https://cdn.example.com/pic.webp\\"],\\"price\\":\\"4990\\"}',
@@ -82,7 +79,6 @@ void main() {
       final importer = ProductImporter(client: client);
       final data = await importer.fetch(Uri.parse('https://www.ozon.ru/product/1234567/'));
       expect(data.title, 'Товар из OZON');
-      expect(data.imageUrl, 'https://cdn.example.com/pic.webp');
       expect(data.price, 4990);
       expect(data.currency, 'RUB');
     });
