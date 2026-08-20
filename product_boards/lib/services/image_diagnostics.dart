@@ -24,7 +24,7 @@ class ImageDiagnosticEntry {
     if (event == 'WEBVIEW_RESULT') {
       final reason = data['reason']?.toString();
       final finalUrl = data['finalUrl']?.toString();
-      return [reason, finalUrl].where((value) => value != null && value!.isNotEmpty).join(' · ').ifEmpty(event);
+      return [reason, finalUrl].where((value) => value != null && value.isNotEmpty).join(' · ').ifEmpty(event);
     }
     final value = source ?? url ?? data['title']?.toString() ?? data['price']?.toString();
     return value ?? event;
