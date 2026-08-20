@@ -27,20 +27,9 @@ class LocalArchiveRepository implements ArchiveRepository {
   }
 
   Future<void> _onCreate(Database db, int version) async {
-    await db.execute('''
-      CREATE TABLE archive_items (
-        id TEXT PRIMARY KEY,
-        data TEXT NOT NULL,
-        normalized_url TEXT NOT NULL
-      )
-    ''');
+    await db.execute('CREATE TABLE archive_items (id TEXT PRIMARY KEY, data TEXT NOT NULL, normalized_url TEXT NOT NULL)');
     await db.execute('CREATE INDEX idx_archive_items_normalized_url ON archive_items(normalized_url)');
-    await db.execute('''
-      CREATE TABLE categories (
-        id TEXT PRIMARY KEY,
-        data TEXT NOT NULL
-      )
-    ''');
+    await db.execute('CREATE TABLE categories (id TEXT PRIMARY KEY, data TEXT NOT NULL)');
   }
 
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
@@ -50,8 +39,8 @@ class LocalArchiveRepository implements ArchiveRepository {
   }
 
   Future<void> _migrateLegacy(Database db) async {
-    final tables = await db.rawQuery("SELECT name FROM sqlite_master WHERE type='table'");
-    final names = tables.map((r) => r['name']?.toString()).toSet();
+    final rows = await db.rawQuery("SELECT name FROM sqlite_master WHERE type='table'");
+    final names = rows.map((r) => r['name']?.toString()).toSet();
     if (!names.contains('products')) return;
 
     final categoryMap = <String, String>{};
@@ -62,18 +51,15 @@ class LocalArchiveRepository implements ArchiveRepository {
           final legacyId = raw['id']?.toString();
           final name = raw['name']?.toString().trim();
           if (legacyId == null || name == null || name.isEmpty) continue;
-          final key = name.toLowerCase();
-          final existing = await findCategoryByName(name, transactionDb: db);
-          final id = existing?.id ?? newId();
-          categoryMap[legacyId] = id;
-          if (existing == null) {
+          var category = await _findCategoryByNameIn(db, name);
+          if (category == null) {
             final now = DateTime.now();
-            final category = Category(id: id, name: name, createdAt: now, updatedAt: now);
-            await db.insert('categories', {'id': id, 'data': jsonEncode(category.toJson())});
+            category = Category(id: newId(), name: name, createdAt: now, updatedAt: now);
+            await db.insert('categories', {'id': category.id, 'data': jsonEncode(category.toJson())});
           }
-          categoryMap.putIfAbsent(key, () => id);
+          categoryMap[legacyId] = category.id;
         } catch (_) {
-          // Ignore malformed legacy rows; the URL/object itself remains recoverable.
+          // Best-effort migration: malformed legacy rows are ignored.
         }
       }
     }
@@ -114,6 +100,16 @@ class LocalArchiveRepository implements ArchiveRepository {
     }
   }
 
+  Future<Category?> _findCategoryByNameIn(Database db, String name) async {
+    final key = name.trim().toLowerCase();
+    final rows = await db.query('categories');
+    for (final row in rows) {
+      final category = Category.fromJson(jsonDecode(row['data']! as String) as Map<String, dynamic>);
+      if (category.name.trim().toLowerCase() == key) return category;
+    }
+    return null;
+  }
+
   @override
   String newId() => _uuid.v4();
 
@@ -123,10 +119,8 @@ class LocalArchiveRepository implements ArchiveRepository {
   Future<List<ArchiveItem>> getItems({String? categoryId}) async {
     final rows = categoryId == null
         ? await _database.query('archive_items')
-        : await _database.query('archive_items', where: 'json_extract(data, \'$.categoryId\') = ?', whereArgs: [categoryId]);
-    final items = rows
-        .map((row) => ArchiveItem.fromJson(jsonDecode(row['data']! as String) as Map<String, dynamic>))
-        .toList();
+        : await _database.query('archive_items', where: "json_extract(data, '\$.categoryId') = ?", whereArgs: [categoryId]);
+    final items = rows.map((row) => ArchiveItem.fromJson(jsonDecode(row['data']! as String) as Map<String, dynamic>)).toList();
     items.sort((a, b) => b.createdAt.compareTo(a.createdAt));
     return items;
   }
@@ -134,8 +128,7 @@ class LocalArchiveRepository implements ArchiveRepository {
   @override
   Future<ArchiveItem?> getItem(String id) async {
     final rows = await _database.query('archive_items', where: 'id = ?', whereArgs: [id], limit: 1);
-    if (rows.isEmpty) return null;
-    return ArchiveItem.fromJson(jsonDecode(rows.first['data']! as String) as Map<String, dynamic>);
+    return rows.isEmpty ? null : ArchiveItem.fromJson(jsonDecode(rows.first['data']! as String) as Map<String, dynamic>);
   }
 
   @override
@@ -172,12 +165,7 @@ class LocalArchiveRepository implements ArchiveRepository {
         final rows = await txn.query('archive_items', where: 'id = ?', whereArgs: [id], limit: 1);
         if (rows.isEmpty) continue;
         final item = ArchiveItem.fromJson(jsonDecode(rows.first['data']! as String) as Map<String, dynamic>);
-        await txn.update(
-          'archive_items',
-          {'data': jsonEncode(item.copyWith(categoryId: categoryId, updatedAt: DateTime.now()).toJson())},
-          where: 'id = ?',
-          whereArgs: [id],
-        );
+        await txn.update('archive_items', {'data': jsonEncode(item.copyWith(categoryId: categoryId, updatedAt: DateTime.now()).toJson())}, where: 'id = ?', whereArgs: [id]);
       }
     });
   }
@@ -185,9 +173,7 @@ class LocalArchiveRepository implements ArchiveRepository {
   @override
   Future<List<Category>> getCategories() async {
     final rows = await _database.query('categories');
-    final categories = rows
-        .map((row) => Category.fromJson(jsonDecode(row['data']! as String) as Map<String, dynamic>))
-        .toList();
+    final categories = rows.map((row) => Category.fromJson(jsonDecode(row['data']! as String) as Map<String, dynamic>)).toList();
     categories.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
     return categories;
   }
@@ -195,33 +181,11 @@ class LocalArchiveRepository implements ArchiveRepository {
   @override
   Future<Category?> getCategory(String id) async {
     final rows = await _database.query('categories', where: 'id = ?', whereArgs: [id], limit: 1);
-    if (rows.isEmpty) return null;
-    return Category.fromJson(jsonDecode(rows.first['data']! as String) as Map<String, dynamic>);
-  }
-
-  Future<Category?> findCategoryByName(String name, {Database? transactionDb}) async {
-    final db = transactionDb ?? _database;
-    final key = name.trim().toLowerCase();
-    final rows = await db.query('categories');
-    for (final row in rows) {
-      final category = Category.fromJson(jsonDecode(row['data']! as String) as Map<String, dynamic>);
-      if (category.name.trim().toLowerCase() == key) return category;
-    }
-    return null;
+    return rows.isEmpty ? null : Category.fromJson(jsonDecode(rows.first['data']! as String) as Map<String, dynamic>);
   }
 
   @override
-  Future<Category?> findCategoryByName(String name) => _findCategoryByName(name);
-
-  Future<Category?> _findCategoryByName(String name) async {
-    final key = name.trim().toLowerCase();
-    final rows = await _database.query('categories');
-    for (final row in rows) {
-      final category = Category.fromJson(jsonDecode(row['data']! as String) as Map<String, dynamic>);
-      if (category.name.trim().toLowerCase() == key) return category;
-    }
-    return null;
-  }
+  Future<Category?> findCategoryByName(String name) => _findCategoryByNameIn(_database, name);
 
   @override
   Future<void> upsertCategory(Category category) async => _database.insert(
@@ -237,12 +201,7 @@ class LocalArchiveRepository implements ArchiveRepository {
       for (final row in rows) {
         final item = ArchiveItem.fromJson(jsonDecode(row['data']! as String) as Map<String, dynamic>);
         if (item.categoryId == id) {
-          await txn.update(
-            'archive_items',
-            {'data': jsonEncode(item.copyWith(categoryId: null, updatedAt: DateTime.now()).toJson())},
-            where: 'id = ?',
-            whereArgs: [item.id],
-          );
+          await txn.update('archive_items', {'data': jsonEncode(item.copyWith(categoryId: null, updatedAt: DateTime.now()).toJson())}, where: 'id = ?', whereArgs: [item.id]);
         }
       }
       await txn.delete('categories', where: 'id = ?', whereArgs: [id]);
