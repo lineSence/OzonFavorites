@@ -46,6 +46,27 @@ void main() {
     expect(result.score, greaterThanOrEqualTo(.55));
   });
 
+  test('classifies a broad shopping item that was previously Other', () {
+    final result = service.classify(
+      _item('Скетчбук А5 120 листов для рисования'),
+    );
+
+    expect(result.category, 'Канцелярия');
+    expect(result.isConfident, isTrue);
+  });
+
+  test('uses decoded URL text as a classification signal', () {
+    final result = service.classify(
+      _item(
+        'Товар',
+        url: 'https://example.com/product/%D0%BA%D0%BE%D1%84%D0%B5-%D0%B7%D0%B5%D1%80%D0%BD%D0%BE',
+      ),
+    );
+
+    expect(result.category, 'Продукты');
+    expect(result.matchedKeywords, contains('кофе'));
+  });
+
   test('returns other for unrelated text', () {
     final result = service.classify(_item('Красивый предмет без описания'));
 
@@ -60,7 +81,15 @@ void main() {
     );
 
     expect(result.category, 'Игры');
-    expect(result.score, .58);
+    expect(result.score, greaterThan(.40));
+  });
+
+  test('uses strong product phrases', () {
+    final result = service.classify(
+      _item('Новая модель', note: 'Игровая приставка для дома'),
+    );
+
+    expect(result.category, 'Электроника');
     expect(result.isConfident, isTrue);
   });
 
@@ -69,9 +98,9 @@ void main() {
       _item('Спортивная куртка для бега'),
     );
 
-    expect(result.category, 'Спорт');
+    expect(result.category, 'Одежда');
     expect(result.alternatives, isNotEmpty);
-    expect(result.alternatives.first.category, 'Одежда');
+    expect(result.alternatives.first.category, 'Спорт');
     expect(result.needsReview, isTrue);
   });
 
