@@ -69,7 +69,7 @@ void main() {
       expect(data.currency, 'RUB');
     });
 
-    test('uses regex fallback for Ozon pages with inline product state', async () {
+    test('uses regex fallback for Ozon pages with inline product state', () async {
       final client = MockClient((request) async {
         return utf8Response(
           '{\\"name\\":\\"Товар из OZON\\",\\"images\\":[\\"https://cdn.example.com/pic.webp\\"],\\"price\\":\\"4990\\"}',
