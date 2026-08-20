@@ -70,19 +70,33 @@ class SmartSortService {
       items.map(classify).toList(growable: false);
 
   SmartSortResult classify(ArchiveItem item) {
-    final text = _normalize('${item.title} ${item.note} ${item.url}');
+    final titleAndNote = _normalize('${item.title} ${item.note}');
+    final url = _normalize(item.url);
     String bestCategory = 'Другое';
     var bestScore = 0.0;
     final bestMatches = <String>[];
 
     for (final entry in _keywords.entries) {
       final matches = <String>[];
+      var titleAndNoteMatches = 0;
+      var urlMatches = 0;
+
       for (final keyword in entry.value) {
-        if (text.contains(_normalize(keyword))) matches.add(keyword);
+        final normalizedKeyword = _normalize(keyword);
+        if (titleAndNote.contains(normalizedKeyword)) {
+          matches.add(keyword);
+          titleAndNoteMatches++;
+        } else if (url.contains(normalizedKeyword)) {
+          matches.add(keyword);
+          urlMatches++;
+        }
       }
       if (matches.isEmpty) continue;
 
-      final score = _score(matches.length);
+      final score = _score(
+        titleAndNoteMatches: titleAndNoteMatches,
+        urlMatches: urlMatches,
+      );
       if (score > bestScore) {
         bestCategory = entry.key;
         bestScore = score;
@@ -100,12 +114,16 @@ class SmartSortService {
     );
   }
 
-  double _score(int matches) => switch (matches) {
-        1 => 0.35,
-        2 => 0.55,
-        3 => 0.72,
-        _ => 0.85,
-      };
+  double _score({required int titleAndNoteMatches, required int urlMatches}) {
+    if (titleAndNoteMatches >= 4) return 0.85;
+    if (titleAndNoteMatches == 3) return 0.72;
+    if (titleAndNoteMatches == 2) return 0.55;
+    if (titleAndNoteMatches == 1) return urlMatches > 0 ? 0.55 : 0.55;
+    if (urlMatches >= 4) return 0.85;
+    if (urlMatches == 3) return 0.72;
+    if (urlMatches == 2) return 0.55;
+    return 0.35;
+  }
 
   String _normalize(String value) => value
       .toLowerCase()
