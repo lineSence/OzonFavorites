@@ -193,5 +193,6 @@ class MarketplaceSearchResolver {
         .toSet();
   }
 
-  static String _clean(String value) => value.replaceAll(RegExp(r'\s+'), ' ').trim();
+  static String _clean(String? value) =>
+      (value ?? '').replaceAll(RegExp(r'\s+'), ' ').trim();
 }
