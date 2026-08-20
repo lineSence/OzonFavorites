@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import '../models/product_preview.dart';
 import 'image_cache_service.dart';
 import 'image_diagnostics.dart';
@@ -16,6 +18,28 @@ class ProductPreviewResolver {
     String? sharedTitle,
     String? sharedImageUri,
   }) async {
+    final isOzon = uri.host.toLowerCase().contains('ozon');
+    final isOzonShortLink = isOzon && _isOzonShortLink(uri);
+
+    ImageDiagnostics.log('SHARE_INPUT', {
+      'url': uri.toString(),
+      'source': _siteName(uri),
+      'sharedTitlePresent': sharedTitle?.trim().isNotEmpty == true,
+      'sharedTitle': sharedTitle,
+      'sharedImagePresent': sharedImageUri?.trim().isNotEmpty == true,
+      'sharedImageUri': sharedImageUri,
+      'isOzonShortLink': isOzonShortLink,
+      'shortLinkCode': isOzonShortLink ? uri.pathSegments.last : null,
+    });
+
+    if (isOzonShortLink) {
+      ImageDiagnostics.log('OZON_SHORT_LINK', {
+        'url': uri.toString(),
+        'code': uri.pathSegments.last,
+        'strategy': 'http_and_webview_then_shared_intent_fallback',
+      });
+    }
+
     ImportedProductData data = const ImportedProductData();
     try {
       data = await _importer.fetch(uri);
@@ -24,12 +48,51 @@ class ProductPreviewResolver {
     }
 
     final title = _chooseTitle(data.title, sharedTitle, uri);
+    if (sharedTitle != null && sharedTitle.trim().isNotEmpty) {
+      ImageDiagnostics.log('SHARED_TITLE', {
+        'url': uri.toString(),
+        'title': sharedTitle.trim(),
+        'selectedTitle': title,
+        'importedTitle': data.title,
+      });
+    }
 
     String? localImage;
     if (sharedImageUri != null && sharedImageUri.isNotEmpty) {
+      final sharedFile = _describeLocalFile(sharedImageUri);
+      ImageDiagnostics.log('SHARED_IMAGE_INPUT', {
+        'url': uri.toString(),
+        'sharedImageUri': sharedImageUri,
+        ...sharedFile,
+      });
       localImage = await _imageCache.cacheLocalUri(sharedImageUri);
-      ImageDiagnostics.log('SHARED_IMAGE', {'url': sharedImageUri, 'path': localImage});
+      ImageDiagnostics.log('SHARED_IMAGE_RESULT', {
+        'url': uri.toString(),
+        'sharedImageUri': sharedImageUri,
+        'path': localImage,
+        'success': localImage != null,
+      });
+    } else {
+      ImageDiagnostics.log('SHARED_IMAGE_ABSENT', {
+        'url': uri.toString(),
+        'reason': 'Android Share Intent did not provide a local image URI',
+      });
     }
+
+    if (localImage != null) {
+      ImageDiagnostics.log('IMAGE_SOURCE_SELECTED', {
+        'url': uri.toString(),
+        'source': 'android_share_intent',
+        'path': localImage,
+      });
+    } else if (data.imageUrl != null && data.imageUrl!.isNotEmpty) {
+      ImageDiagnostics.log('IMAGE_SOURCE_SELECTED', {
+        'url': uri.toString(),
+        'source': 'importer',
+        'imageUrl': data.imageUrl,
+      });
+    }
+
     localImage ??= await _tryCache(data.imageUrl, uri);
 
     ImageDiagnostics.log('PREVIEW_RESULT', {
@@ -38,6 +101,8 @@ class ProductPreviewResolver {
       'price': data.price,
       'image': data.imageUrl,
       'localImage': localImage,
+      'imageSource': sharedImageUri?.isNotEmpty == true && localImage != null ? 'android_share_intent' : (data.imageUrl != null ? 'importer' : null),
+      'isOzonShortLink': isOzonShortLink,
     });
 
     return ProductPreview(
@@ -54,11 +119,52 @@ class ProductPreviewResolver {
 
   Future<String?> _tryCache(String? imageUrl, Uri referer) async {
     if (imageUrl == null || imageUrl.isEmpty) {
-      ImageDiagnostics.log('IMAGE_URL_MISSING', {'url': referer.toString()});
+      ImageDiagnostics.log('IMAGE_URL_MISSING', {
+        'url': referer.toString(),
+        'reason': 'No usable image URL was returned by HTTP/WebView import',
+      });
       return null;
     }
-    return _imageCache.cacheUrl(imageUrl, referer: referer);
+    final cached = await _imageCache.cacheUrl(imageUrl, referer: referer);
+    ImageDiagnostics.log('IMAGE_URL_CACHE_RESULT', {
+      'url': referer.toString(),
+      'imageUrl': imageUrl,
+      'success': cached != null,
+      'localImage': cached,
+    });
+    return cached;
   }
+
+  static Map<String, Object?> _describeLocalFile(String value) {
+    try {
+      final uri = Uri.tryParse(value);
+      if (uri?.scheme != 'file') {
+        return {
+          'scheme': uri?.scheme,
+          'exists': false,
+          'reason': 'shared URI is not file://',
+        };
+      }
+      final file = File(uri!.toFilePath());
+      final exists = file.existsSync();
+      return {
+        'scheme': 'file',
+        'path': file.path,
+        'exists': exists,
+        'bytes': exists ? file.lengthSync() : null,
+      };
+    } catch (error) {
+      return {
+        'exists': false,
+        'describeError': error.toString(),
+      };
+    }
+  }
+
+  static bool _isOzonShortLink(Uri uri) =>
+      uri.host.toLowerCase().contains('ozon') &&
+      uri.pathSegments.isNotEmpty &&
+      uri.pathSegments.first.toLowerCase() == 't';
 
   static String _chooseTitle(String? imported, String? sharedTitle, Uri uri) {
     final candidates = <String>[if (imported?.trim().isNotEmpty == true) imported!.trim(), if (sharedTitle?.trim().isNotEmpty == true) sharedTitle!.trim()];
