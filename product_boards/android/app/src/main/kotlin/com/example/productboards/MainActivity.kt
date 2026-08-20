@@ -1,6 +1,8 @@
 package com.example.productboards
 
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
@@ -34,6 +36,7 @@ class MainActivity : FlutterActivity() {
     private val browserEvents = mutableListOf<Map<String, Any?>>()
     private var browserFinalUrl: String? = null
     private var browserPageTitle: String? = null
+    private var browserScreenshotUri: String? = null
 
     private data class BrowserRequest(
         val url: String,
@@ -123,6 +126,7 @@ class MainActivity : FlutterActivity() {
         browserEvents.clear()
         browserFinalUrl = null
         browserPageTitle = null
+        browserScreenshotUri = null
 
         val request = activeBrowserRequest ?: return
         logBrowserEvent("START", mapOf("originalUrl" to request.url))
@@ -142,8 +146,9 @@ class MainActivity : FlutterActivity() {
         webView.settings.javaScriptCanOpenWindowsAutomatically = true
         webView.settings.cacheMode = WebSettings.LOAD_DEFAULT
         webView.settings.userAgentString = "Mozilla/5.0 (Linux; Android 14; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
+        webView.setBackgroundColor(android.graphics.Color.WHITE)
         webView.alpha = 0f
-        webView.layoutParams = FrameLayout.LayoutParams(720, 1280)
+        webView.layoutParams = FrameLayout.LayoutParams(900, 1600)
         webView.isVerticalScrollBarEnabled = false
         webView.isHorizontalScrollBarEnabled = false
 
@@ -151,10 +156,7 @@ class MainActivity : FlutterActivity() {
         webView.webViewClient = object : WebViewClient() {
             override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
                 browserFinalUrl = url ?: browserFinalUrl
-                logBrowserEvent("PAGE_STARTED", mapOf(
-                    "url" to url,
-                    "title" to view?.title,
-                ))
+                logBrowserEvent("PAGE_STARTED", mapOf("url" to url, "title" to view?.title))
             }
 
             override fun onPageFinished(view: WebView?, url: String?) {
@@ -165,7 +167,7 @@ class MainActivity : FlutterActivity() {
                     "title" to browserPageTitle,
                     "attempt" to browserAttempt,
                 ))
-                browserHandler.postDelayed({ extractBrowserData(webView) }, 2200L)
+                browserHandler.postDelayed({ captureAndExtract(webView) }, 1800L)
             }
 
             override fun onReceivedHttpError(view: WebView?, request: WebResourceRequest?, errorResponse: WebResourceResponse?) {
@@ -207,6 +209,7 @@ class MainActivity : FlutterActivity() {
                     "originalUrl" to request.url,
                     "finalUrl" to browserFinalUrl,
                     "attempts" to browserAttempt,
+                    "screenshotUri" to browserScreenshotUri,
                 ))
                 finishBrowserResolve(null, "timeout")
             }
@@ -216,244 +219,198 @@ class MainActivity : FlutterActivity() {
             webView.loadUrl(request.url)
             logBrowserEvent("LOAD_URL", mapOf("url" to request.url))
         } catch (error: Exception) {
-            logBrowserEvent("LOAD_URL_EXCEPTION", mapOf(
-                "url" to request.url,
-                "error" to error.toString(),
-            ))
+            logBrowserEvent("LOAD_URL_EXCEPTION", mapOf("url" to request.url, "error" to error.toString()))
             finishBrowserResolve(null, "loadUrl_exception")
         }
     }
 
-    private fun logBrowserEvent(stage: String, details: Map<String, Any?> = emptyMap()) {
-        val event = linkedMapOf<String, Any?>(
-            "stage" to stage,
-            "timestampMs" to System.currentTimeMillis(),
-        )
-        event.putAll(details)
-        browserEvents.add(event)
-        if (browserEvents.size > 200) browserEvents.removeAt(0)
-    }
-
-    private fun extractBrowserData(webView: WebView) {
+    private fun captureAndExtract(webView: WebView) {
         if (browserFinished) return
         browserAttempt++
-        logBrowserEvent("JS_EXTRACT_START", mapOf(
+        browserFinalUrl = webView.url ?: browserFinalUrl
+        browserPageTitle = webView.title ?: browserPageTitle
+        logBrowserEvent("SCREENSHOT_START", mapOf(
             "attempt" to browserAttempt,
-            "url" to webView.url,
-            "title" to webView.title,
+            "url" to browserFinalUrl,
+            "title" to browserPageTitle,
         ))
+
+        val screenshotAllowed = isScreenshotAllowed(browserFinalUrl, browserPageTitle)
+        if (screenshotAllowed) {
+            browserScreenshotUri = captureWebViewScreenshot(webView)
+        } else {
+            logBrowserEvent("SCREENSHOT_SKIPPED", mapOf(
+                "reason" to "error_or_antibot_page",
+                "url" to browserFinalUrl,
+                "title" to browserPageTitle,
+            ))
+        }
 
         val script = """
             (function() {
               const clean = v => v == null ? null : String(v).replace(/\\s+/g, ' ').trim();
               const host = location.host.toLowerCase();
-              const isAvito = host.includes('avito');
               const meta = name => {
                 const a = document.querySelector('meta[property="' + name + '"]');
                 const b = document.querySelector('meta[name="' + name + '"]');
                 return clean((a || b)?.content);
               };
-              const normalizeUrl = v => {
-                if (!v) return null;
-                v = String(v).trim().replace(/\\u002F/g, '/').replace(/\\\\\//g, '/');
-                if (v.startsWith('//')) v = location.protocol + v;
-                return /^https?:\\/\\//i.test(v) ? v : null;
-              };
-              const genericImage = v => {
-                if (!v) return true;
-                const s = String(v).toLowerCase();
-                if (/(logo|favicon|sprite|avatar|placeholder|brand)/i.test(s)) return true;
-                if (isAvito && /(avito\\.(?:ru|st)|static|cdn).*?(logo|favicon|brand)/i.test(s)) return true;
-                return false;
-              };
-              const attrs = el => {
-                if (!el) return null;
-                for (const k of ['src','data-src','data-original','data-lazy-src','content','href']) {
-                  const v = normalizeUrl(el.getAttribute(k));
-                  if (v && !genericImage(v)) return v;
-                }
-                const srcset = el.getAttribute('srcset') || el.getAttribute('data-srcset');
-                if (srcset) {
-                  for (const part of srcset.split(',')) {
-                    const v = normalizeUrl(part.trim().split(/\\s+/)[0]);
-                    if (v && !genericImage(v)) return v;
-                  }
-                }
-                return null;
-              };
-              const visible = el => {
-                if (!el) return false;
-                const r = el.getBoundingClientRect();
-                return r.width >= 80 && r.height >= 80;
-              };
               const textOf = selector => {
                 const el = document.querySelector(selector);
                 return clean(el?.innerText || el?.textContent);
               };
-
               let title = meta('og:title') || meta('twitter:title');
-              const titleSelectors = host.includes('wildberries')
-                ? ['h1[class*="product-page"]','h1[class*="ProductCard"]','h1']
-                : ['[data-widget="webProductHeading"] h1','[data-widget="webProductHeading"] h2','h1'];
-              for (const selector of titleSelectors) {
+              for (const selector of ['[data-widget="webProductHeading"] h1','h1']) {
                 if (!title) title = textOf(selector);
               }
               if (!title) title = clean(document.title);
-
-              let image = genericImage(meta('og:image')) ? null : meta('og:image');
-              if (!image) image = genericImage(meta('twitter:image')) ? null : meta('twitter:image');
-              if (!image) image = attrs(document.querySelector('[itemprop="image"]'));
-              const imageSelectors = isAvito
-                ? ['[data-marker*="item"] img','[class*="gallery"] img','[class*="photo"] img','picture img','img']
-                : host.includes('wildberries')
-                  ? ['[class*="photo"] img','[class*="productCard"] img','picture img','img']
-                  : ['[data-widget*="Gallery"] img','[class*="gallery"] img','picture img','img'];
-              if (!image) {
-                for (const selector of imageSelectors) {
-                  for (const el of document.querySelectorAll(selector)) {
-                    if (!visible(el) && selector.endsWith('img')) continue;
-                    const src = attrs(el);
-                    if (src) {
-                      image = src;
-                      break;
-                    }
-                  }
-                  if (image) break;
-                }
-              }
-
-              let currency = meta('product:price:currency') || (host.includes('wildberries') || isAvito ? 'RUB' : null);
-              let price = null;
-              const priceSelectors = isAvito
-                ? ['[itemprop="price"]','[data-marker*="item-price"]','[data-marker*="price"]','[class*="price"]']
-                : host.includes('wildberries')
-                  ? ['[class*="price-block"]','[class*="priceBlock"]','[class*="price"]','[data-testid*="price"]']
-                  : ['[data-widget*="price"]','[class*="price"]','[data-testid*="price"]'];
-              const priceTexts = [];
-              for (const selector of priceSelectors) {
-                for (const el of document.querySelectorAll(selector)) {
-                  const t = clean(el.innerText || el.textContent);
-                  if (t && /\\d/.test(t)) priceTexts.push(t);
-                  if (priceTexts.length >= 20) break;
-                }
-                if (priceTexts.length >= 20) break;
-              }
-              const bodyText = clean(document.body?.innerText || '');
-              const scriptText = Array.from(document.scripts).map(s => s.textContent || '').join(' ');
-              const allText = priceTexts.join(' ') + ' ' + bodyText.slice(0, 120000) + ' ' + scriptText.slice(0, 250000);
-
-              const rubPatterns = [
+              const currency = meta('product:price:currency') || 'RUB';
+              const body = clean(document.body?.innerText || '');
+              const scripts = Array.from(document.scripts).map(s => s.textContent || '').join(' ');
+              const allText = (body.slice(0, 140000) + ' ' + scripts.slice(0, 200000));
+              const patterns = [
                 /([0-9][0-9\\s\\u00a0\\u202f,.]*)\\s*(?:₽|руб\\.?|RUB)\\b/i,
-                /(?:₽|руб\\.?|RUB)\\s*([0-9][0-9\\s\\u00a0\\u202f,.]*)/i
+                /(?:₽|руб\\.?|RUB)\\s*([0-9][0-9\\s\\u00a0\\u202f,.]*)/i,
+                /["'](?:price|currentPrice|salePrice|finalPrice)["']\\s*:\\s*["']?([0-9][0-9\\s.,\\u00a0\\u202f]*)/i
               ];
-              const quotedPatterns = [
-                /["'](?:price|currentPrice|salePrice|finalPrice)["']\\s*:\\s*["']?([0-9][0-9\\s.,\\u00a0\\u202f]*)/i,
-                /["']priceFormatted["']\\s*:\\s*["']([^"']+)["']/i
-              ];
-              let candidate = null;
-              for (const re of rubPatterns) {
+              let price = null;
+              for (const re of patterns) {
                 const m = allText.match(re);
-                if (m) { candidate = m[1]; break; }
-              }
-              if (!candidate) {
-                for (const re of quotedPatterns) {
-                  const m = allText.match(re);
-                  if (m) { candidate = m[1]; break; }
-                }
-              }
-              if (candidate) {
-                const normalized = candidate.replace(/[\\s\\u00a0\\u202f]/g, '').replace(/(?<=\\d),(?=\\d)/g, '.').replace(/[^0-9.]/g, '');
+                if (!m) continue;
+                const normalized = String(m[1]).replace(/[\\s\\u00a0\\u202f]/g, '').replace(',', '.').replace(/[^0-9.]/g, '');
                 const parsed = parseFloat(normalized);
-                if (!Number.isNaN(parsed) && parsed > 0 && parsed < 100000000) price = parsed;
+                if (!Number.isNaN(parsed) && parsed > 0 && parsed < 100000000) { price = parsed; break; }
               }
-
               return JSON.stringify({
                 title,
-                imageUrl:image,
                 price,
                 currency,
-                description:meta('og:description') || meta('twitter:description'),
-                host,
-                finalUrl:location.href,
-                pageTitle:clean(document.title),
-                readyState:document.readyState,
-                bodyLength:document.body?.innerText?.length || 0,
-                scriptCount:document.scripts?.length || 0,
+                description: meta('og:description') || meta('twitter:description'),
+                finalUrl: location.href,
+                pageTitle: clean(document.title),
+                readyState: document.readyState,
+                bodyLength: document.body?.innerText?.length || 0
               });
             })();
         """.trimIndent()
 
         try {
-            webView.evaluateJavascript("window.scrollTo(0, Math.min(document.body.scrollHeight, 1400)); $script") { rawResult ->
+            webView.evaluateJavascript(script) { rawResult ->
                 browserHandler.post {
+                    var title: String? = null
+                    var price: Double? = null
+                    var currency: String? = null
+                    var description: String? = null
                     try {
-                        if (rawResult.isNullOrBlank() || rawResult == "null") {
-                            logBrowserEvent("JS_RESULT_EMPTY", mapOf("attempt" to browserAttempt, "url" to webView.url))
-                            scheduleRetryOrFinish(webView, null, "js_empty")
-                            return@post
-                        }
-                        val jsonString = JSONTokener(rawResult).nextValue()
-                        val json = if (jsonString is String) org.json.JSONObject(jsonString) else null
-                        if (json == null) {
-                            logBrowserEvent("JS_JSON_INVALID", mapOf("attempt" to browserAttempt, "rawLength" to rawResult.length))
-                            scheduleRetryOrFinish(webView, null, "js_json_invalid")
-                            return@post
-                        }
-                        browserFinalUrl = json.optString("finalUrl", null) ?: webView.url ?: browserFinalUrl
-                        browserPageTitle = json.optString("pageTitle", null) ?: webView.title ?: browserPageTitle
-                        val price = if (json.has("price") && !json.isNull("price")) json.getDouble("price") else null
-                        val result = mapOf<String, Any?>(
-                            "title" to json.optString("title", null),
-                            "imageUrl" to json.optString("imageUrl", null),
-                            "price" to price,
-                            "currency" to json.optString("currency", null),
-                            "description" to json.optString("description", null),
-                        )
-                        logBrowserEvent("JS_RESULT", mapOf(
-                            "attempt" to browserAttempt,
-                            "finalUrl" to browserFinalUrl,
-                            "pageTitle" to browserPageTitle,
-                            "title" to result["title"],
-                            "imageUrl" to result["imageUrl"],
-                            "price" to result["price"],
-                            "currency" to result["currency"],
-                            "readyState" to json.optString("readyState", null),
-                            "bodyLength" to json.optInt("bodyLength", 0),
-                            "scriptCount" to json.optInt("scriptCount", 0),
-                        ))
-                        val hasUsefulData = result.values.any { it != null && it.toString().isNotBlank() && it.toString() != "null" }
-                        if (!hasUsefulData && browserAttempt < 3) {
-                            browserHandler.postDelayed({ extractBrowserData(webView) }, 1800L)
+                        if (!rawResult.isNullOrBlank() && rawResult != "null") {
+                            val jsonString = JSONTokener(rawResult).nextValue()
+                            if (jsonString is String) {
+                                val json = org.json.JSONObject(jsonString)
+                                title = json.optString("title", null)
+                                price = if (json.has("price") && !json.isNull("price")) json.getDouble("price") else null
+                                currency = json.optString("currency", null)
+                                description = json.optString("description", null)
+                                browserFinalUrl = json.optString("finalUrl", null) ?: browserFinalUrl
+                                browserPageTitle = json.optString("pageTitle", null) ?: browserPageTitle
+                                logBrowserEvent("JS_RESULT", mapOf(
+                                    "attempt" to browserAttempt,
+                                    "finalUrl" to browserFinalUrl,
+                                    "pageTitle" to browserPageTitle,
+                                    "title" to title,
+                                    "price" to price,
+                                    "currency" to currency,
+                                    "bodyLength" to json.optInt("bodyLength", 0),
+                                ))
+                            }
                         } else {
-                            finishBrowserResolve(result, if (hasUsefulData) "success" else "no_data")
+                            logBrowserEvent("JS_RESULT_EMPTY", mapOf("attempt" to browserAttempt, "url" to webView.url))
                         }
                     } catch (error: Exception) {
-                        logBrowserEvent("JS_PARSE_EXCEPTION", mapOf(
-                            "attempt" to browserAttempt,
-                            "error" to error.toString(),
-                            "url" to webView.url,
-                        ))
-                        scheduleRetryOrFinish(webView, null, "js_parse_exception")
+                        logBrowserEvent("JS_PARSE_EXCEPTION", mapOf("attempt" to browserAttempt, "error" to error.toString()))
                     }
+
+                    val payload = linkedMapOf<String, Any?>()
+                    payload["title"] = title
+                    payload["price"] = price
+                    payload["currency"] = currency
+                    payload["description"] = description
+                    payload["originalUrl"] = activeBrowserRequest?.url
+                    payload["finalUrl"] = browserFinalUrl ?: webView.url
+                    payload["pageTitle"] = browserPageTitle ?: webView.title
+                    payload["screenshotUri"] = browserScreenshotUri
+
+                    val hasAnything = title != null || price != null || browserScreenshotUri != null
+                    finishBrowserResolve(payload, if (hasAnything) "success" else "no_data")
                 }
             }
         } catch (error: Exception) {
-            logBrowserEvent("JS_EVALUATE_EXCEPTION", mapOf(
-                "attempt" to browserAttempt,
-                "error" to error.toString(),
-                "url" to webView.url,
-            ))
-            scheduleRetryOrFinish(webView, null, "js_evaluate_exception")
+            logBrowserEvent("JS_EVALUATE_EXCEPTION", mapOf("attempt" to browserAttempt, "error" to error.toString()))
+            val payload = mapOf<String, Any?>(
+                "originalUrl" to activeBrowserRequest?.url,
+                "finalUrl" to browserFinalUrl ?: webView.url,
+                "pageTitle" to browserPageTitle ?: webView.title,
+                "screenshotUri" to browserScreenshotUri,
+            )
+            finishBrowserResolve(payload, if (browserScreenshotUri != null) "screenshot_only" else "js_exception")
         }
     }
 
-    private fun scheduleRetryOrFinish(webView: WebView, data: Map<String, Any?>?, reason: String) {
-        if (browserFinished) return
-        if (browserAttempt < 3) {
-            browserHandler.postDelayed({ extractBrowserData(webView) }, 1800L)
-        } else {
-            finishBrowserResolve(data, reason)
+    private fun isScreenshotAllowed(url: String?, title: String?): Boolean {
+        val u = (url ?: "").lowercase()
+        val t = (title ?: "").lowercase()
+        if (u.isBlank()) return false
+        val blockedTitle = listOf(
+            "похоже, нет соединения",
+            "antibot",
+            "access denied",
+            "robot",
+            "captcha",
+            "forbidden",
+            "403",
+        ).any { t.contains(it) }
+        val blockedUrl = u.contains("captcha") || u.contains("challenge") || u.contains("blocked")
+        return !blockedTitle && !blockedUrl
+    }
+
+    private fun captureWebViewScreenshot(webView: WebView): String? {
+        return try {
+            if (webView.width <= 0 || webView.height <= 0) {
+                logBrowserEvent("SCREENSHOT_FAIL", mapOf("reason" to "invalid_view_size", "width" to webView.width, "height" to webView.height))
+                return null
+            }
+            webView.scrollTo(0, 0)
+            val bitmap = Bitmap.createBitmap(webView.width, webView.height, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(bitmap)
+            webView.draw(canvas)
+            val file = File(cacheDir, "pinzon_screenshot_${System.currentTimeMillis()}.jpg")
+            FileOutputStream(file).use { out ->
+                if (!bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)) {
+                    logBrowserEvent("SCREENSHOT_FAIL", mapOf("reason" to "bitmap_compress_failed"))
+                    bitmap.recycle()
+                    return null
+                }
+                out.flush()
+            }
+            bitmap.recycle()
+            logBrowserEvent("SCREENSHOT_SAVED", mapOf(
+                "path" to file.absolutePath,
+                "uri" to file.toURI().toString(),
+                "width" to webView.width,
+                "height" to webView.height,
+                "bytes" to file.length(),
+            ))
+            file.toURI().toString()
+        } catch (error: Exception) {
+            logBrowserEvent("SCREENSHOT_FAIL", mapOf("error" to error.toString()))
+            null
         }
+    }
+
+    private fun logBrowserEvent(stage: String, details: Map<String, Any?> = emptyMap()) {
+        val event = linkedMapOf<String, Any?>("stage" to stage, "timestampMs" to System.currentTimeMillis())
+        event.putAll(details)
+        browserEvents.add(event)
+        if (browserEvents.size > 200) browserEvents.removeAt(0)
     }
 
     private fun finishBrowserResolve(data: Map<String, Any?>?, reason: String) {
@@ -462,17 +419,19 @@ class MainActivity : FlutterActivity() {
         val request = activeBrowserRequest
         val payload = linkedMapOf<String, Any?>()
         if (data != null) payload.putAll(data)
-        payload["originalUrl"] = request?.url
-        payload["finalUrl"] = browserFinalUrl ?: activeBrowser?.url
-        payload["pageTitle"] = browserPageTitle ?: activeBrowser?.title
+        payload["originalUrl"] = payload["originalUrl"] ?: request?.url
+        payload["finalUrl"] = payload["finalUrl"] ?: browserFinalUrl ?: activeBrowser?.url
+        payload["pageTitle"] = payload["pageTitle"] ?: browserPageTitle ?: activeBrowser?.title
         payload["reason"] = reason
         payload["attempts"] = browserAttempt
+        payload["screenshotUri"] = payload["screenshotUri"] ?: browserScreenshotUri
         payload["diagnostics"] = browserEvents.toList()
         logBrowserEvent("FINISH", mapOf(
             "reason" to reason,
             "originalUrl" to request?.url,
             "finalUrl" to payload["finalUrl"],
             "pageTitle" to payload["pageTitle"],
+            "screenshotUri" to payload["screenshotUri"],
             "attempts" to browserAttempt,
         ))
         payload["diagnostics"] = browserEvents.toList()
