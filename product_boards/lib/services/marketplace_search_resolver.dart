@@ -15,8 +15,6 @@ class MarketplaceSearchCandidate {
   final String title;
   final double score;
   final String engine;
-
-  
 }
 
 class MarketplaceSearchResolver {
@@ -264,7 +262,7 @@ class MarketplaceSearchResolver {
     }
 
     if (matches.isEmpty) {
-      final hrefPattern = RegExp(r"href=['\"]([^'\"]+)['\"]", caseSensitive: false);
+      final hrefPattern = RegExp(r'''href=["']([^"']+)["']''', caseSensitive: false);
       for (final match in hrefPattern.allMatches(text)) {
         final href = match.group(1);
         if (href == null) continue;
