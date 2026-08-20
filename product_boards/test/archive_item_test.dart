@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:product_boards/models/archive_item.dart';
+import 'package:pinzon/models/archive_item.dart';
 
 defaultItem() => ArchiveItem(
       id: '1',
