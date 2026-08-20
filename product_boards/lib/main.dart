@@ -9,6 +9,7 @@ import 'models/archive_item.dart';
 import 'models/category.dart';
 import 'repositories/archive_repository.dart';
 import 'repositories/local_archive_repository.dart';
+import 'screens/smart_sort_page.dart';
 import 'services/metadata_queue.dart';
 import 'services/url_normalizer.dart';
 
@@ -225,6 +226,20 @@ class _ArchiveScreenState extends State<ArchiveScreen> {
     await _reload();
   }
 
+  Future<void> _openSmartSort() async {
+    if (_items.isEmpty) {
+      _snack('В текущей подборке нет товаров');
+      return;
+    }
+    final changed = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => SmartSortPage(repository: widget.repository, items: _items),
+      ),
+    );
+    if (changed == true && mounted) await _reload();
+  }
+
   Future<void> _addDialog() async {
     final controller = TextEditingController();
     final raw = await showDialog<String>(
@@ -424,7 +439,10 @@ class _ArchiveScreenState extends State<ArchiveScreen> {
                 Text(title, style: Theme.of(context).textTheme.labelMedium),
               ]),
         actions: [
-          if (!_selectionMode) IconButton(tooltip: 'Сортировать', onPressed: () => setState(() => _selectionMode = true), icon: const Icon(Icons.checklist_outlined)),
+          if (!_selectionMode) ...[
+            IconButton(tooltip: 'Умная сортировка', onPressed: _openSmartSort, icon: const Icon(Icons.auto_awesome_outlined)),
+            IconButton(tooltip: 'Сортировать', onPressed: () => setState(() => _selectionMode = true), icon: const Icon(Icons.checklist_outlined)),
+          ],
         ],
       ),
       drawer: _buildDrawer(),
