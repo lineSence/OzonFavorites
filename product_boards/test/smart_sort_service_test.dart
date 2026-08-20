@@ -64,14 +64,15 @@ void main() {
     expect(result.isConfident, isFalse);
   });
 
-  test('returns alternatives for ambiguous products', () {
+  test('returns ranked alternatives for ambiguous products', () {
     final result = service.classify(
       _item('Спортивная куртка для бега'),
     );
 
-    expect(result.category, 'Одежда');
+    expect(result.category, 'Спорт');
     expect(result.alternatives, isNotEmpty);
-    expect(result.alternatives.first.category, 'Спорт');
+    expect(result.alternatives.first.category, 'Одежда');
+    expect(result.needsReview, isTrue);
   });
 
   test('builds product features with marketplace and image signals', () {
