@@ -66,8 +66,6 @@ class ProductImporter {
     ImportedProductData data = const ImportedProductData();
     Object? httpError;
 
-    // HTTP remains a metadata source for sites that allow it, but it no longer
-    // participates in image acquisition. Covers are always screenshots.
     try {
       data = await _fetchMetadata(uri);
       ImageDiagnostics.log('HTTP_RESULT', {
@@ -102,10 +100,9 @@ class ProductImporter {
             }
           }
 
-          final screenshotUri = _nullableString(result['screenshotUri']);
           final browserData = ImportedProductData(
             title: _nullableString(result['title']),
-            screenshotUri: screenshotUri,
+            screenshotUri: _nullableString(result['screenshotUri']),
             price: _nullableDouble(result['price']),
             currency: _nullableString(result['currency']),
             description: _nullableString(result['description']),
@@ -126,9 +123,7 @@ class ProductImporter {
           });
 
           data = data.merge(browserData);
-          if (browserData.title != null ||
-              browserData.price != null ||
-              browserData.screenshotUri != null) {
+          if (browserData.title != null || browserData.price != null || browserData.screenshotUri != null) {
             httpError = null;
           }
         } else {
@@ -156,10 +151,7 @@ class ProductImporter {
       'resolvedUrl': data.resolvedUrl,
     });
 
-    if (httpError != null &&
-        data.title == null &&
-        data.price == null &&
-        data.screenshotUri == null) {
+    if (httpError != null && data.title == null && data.price == null && data.screenshotUri == null) {
       throw httpError;
     }
     return data;
@@ -185,6 +177,7 @@ class ProductImporter {
 
     String? title = _clean(meta('og:title')) ??
         _clean(meta('twitter:title')) ??
+        _clean(document.querySelector('[data-widget="webProductHeading"] h1')?.text) ??
         _clean(document.querySelector('h1')?.text) ??
         _clean(document.querySelector('title')?.text);
     double? price = _parsePrice(meta('product:price:amount'));
@@ -200,6 +193,15 @@ class ProductImporter {
           break;
         }
       }
+    }
+
+    for (final node in document.querySelectorAll('div[id^="state-webPrice-"]')) {
+      final state = _decodeState(node.attributes['data-state']);
+      if (state == null) continue;
+      final rawPrice = '${state['price'] ?? state['currentPrice'] ?? state['salePrice'] ?? state['finalPrice'] ?? state['discountPrice'] ?? ''}';
+      price ??= _parsePrice(rawPrice);
+      currency ??= _currencyFromPrice(rawPrice);
+      if (price != null) break;
     }
 
     for (final node in document.querySelectorAll('script[type="application/ld+json"]')) {
@@ -222,6 +224,24 @@ class ProductImporter {
       }
     }
 
+    if (title == null || price == null) {
+      final inline = response.body.replaceAll(RegExp(r'\\+"'), '"');
+      if (title == null) {
+        final match = RegExp(r'"name"\s*:\s*"([^"\\]{3,500})"').firstMatch(inline);
+        title = ImportedProductData._selectTitle(title, _jsonUnescape(match?.group(1)));
+      }
+      if (price == null) {
+        final match = RegExp(
+          r'"(?:price|currentPrice|salePrice|finalPrice|discountPrice|oldPrice)"\s*:\s*"?([0-9][0-9\s.,\u00A0\u202F]*)',
+          caseSensitive: false,
+        ).firstMatch(inline);
+        if (match != null) {
+          price = _parsePrice(match.group(1));
+          currency ??= 'RUB';
+        }
+      }
+    }
+
     return ImportedProductData(
       title: _clean(title),
       price: price,
@@ -229,6 +249,22 @@ class ProductImporter {
       description: description,
       resolvedUrl: response.request?.url.toString(),
     );
+  }
+
+  static Map<String, dynamic>? _decodeState(String? raw) {
+    if (raw == null || raw.trim().isEmpty) return null;
+    try {
+      final decoded = jsonDecode(raw);
+      return decoded is Map ? Map<String, dynamic>.from(decoded) : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static String? _currencyFromPrice(String value) {
+    final normalized = value.toUpperCase();
+    if (normalized.contains('₽') || normalized.contains('RUB') || normalized.contains('РУБ')) return 'RUB';
+    return null;
   }
 
   static bool _needsBrowser(Uri uri) {
@@ -274,5 +310,15 @@ class ProductImporter {
         .replaceAll(',', '.');
     final match = RegExp(r'\d+(?:\.\d+)?').firstMatch(normalized);
     return match == null ? null : double.tryParse(match.group(0)!);
+  }
+
+  static String? _jsonUnescape(String? value) {
+    if (value == null) return null;
+    final normalized = value.replaceAll(r'\"', '"').replaceAll(r'\\', r'\');
+    try {
+      return jsonDecode('"${normalized.replaceAll('"', r'\"')}"') as String;
+    } catch (_) {
+      return normalized;
+    }
   }
 }
