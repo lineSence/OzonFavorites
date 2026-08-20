@@ -255,7 +255,7 @@ class MarketplaceSearchResolver {
         var raw = match.group(0) ?? '';
         raw = raw.replaceAll(r'\/', '/');
         raw = raw.replaceAll('&amp;', '&');
-        raw = raw.replaceAll(RegExp(r'[\\"\'<>\]\[,;)]+$'), '');
+        raw = raw.replaceAll(RegExp("[\\\\\\\"'<>\\]\\[,;)]+$"), '');
         if (!raw.startsWith('http')) raw = 'https://$raw';
         if (raw.startsWith('https://ozon.ru/')) {
           raw = 'https://www.ozon.ru/${raw.substring('https://ozon.ru/'.length)}';
