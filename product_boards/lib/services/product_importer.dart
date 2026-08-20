@@ -152,6 +152,17 @@ class ProductImporter {
       if (price != null) break;
     }
 
+    for (final node in document.querySelectorAll('div[id^="state-webGallery-"]')) {
+      final state = _decodeState(node.attributes['data-state']);
+      if (state == null) continue;
+      final candidate = _firstUsableImage(state['images']) ?? _firstUsableImage(state['items']) ?? _firstUsableImage(state['image']);
+      if (candidate != null && !_isGenericImage(candidate, uri)) {
+        image ??= candidate;
+        if (image == null || _isGenericImage(image, uri)) image = candidate;
+      }
+      if (image != null && !_isGenericImage(image, uri)) break;
+    }
+
     for (final node in document.querySelectorAll('script[type="application/ld+json"]')) {
       try {
         final decoded = jsonDecode(node.text.trim());
@@ -209,13 +220,8 @@ class ProductImporter {
     final normalizedRaw = response.body.replaceAll(RegExp(r'\\+"'), '"');
     final inlineCandidates = <String>[response.body, normalizedRaw];
     for (final inline in inlineCandidates) {
-      if (title == null) {
-        final match = RegExp(r'"name"\s*:\s*"([^"\\]{3,500})"').firstMatch(inline);
-        title = _jsonUnescape(match?.group(1));
-      } else {
-        final match = RegExp(r'"name"\s*:\s*"([^"\\]{3,500})"').firstMatch(inline);
-        title = ImportedProductData._selectTitle(title, _jsonUnescape(match?.group(1)));
-      }
+      final match = RegExp(r'"name"\s*:\s*"([^"\\]{3,500})"').firstMatch(inline);
+      title = ImportedProductData._selectTitle(title, _jsonUnescape(match?.group(1)));
       if (image == null || _isGenericImage(image, uri)) {
         final matches = RegExp(
           r'"(?:image|images)"\s*:\s*(?:\[\s*)?"(https?[^"\\]+(?:\.(?:jpg|jpeg|png|webp)|(?:\?|$))[^"\\]*)',
