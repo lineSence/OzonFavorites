@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:product_boards/services/product_importer.dart';
+import 'package:pinzon/services/product_importer.dart';
 
 http.Response utf8Response(String body, int statusCode) =>
     http.Response.bytes(utf8.encode(body), statusCode, headers: {'content-type': 'text/html; charset=utf-8'});
@@ -25,7 +25,7 @@ void main() {
           </html>
         ''', 200);
       });
-      final importer = ProductImporter(client: client);
+      final importer = ProductImporter(client: client, enableBrowserFallback: false);
       final data = await importer.fetch(Uri.parse('https://www.ozon.ru/product/nice-phone-1234567'));
       expect(data.title, 'Смартфон X');
       expect(data.price, 12499);
@@ -45,14 +45,14 @@ void main() {
           </html>
         ''', 200);
       });
-      final importer = ProductImporter(client: client);
+      final importer = ProductImporter(client: client, enableBrowserFallback: false);
       final data = await importer.fetch(Uri.parse('https://www.ozon.ru/product/1234567/'));
       expect(data.title, 'Кофе в зернах Test');
       expect(data.price, 1799);
       expect(data.currency, 'RUB');
     });
 
-    test('falls back to JSON-LD for title and price when OG tags are missing', () async {
+    test('extracts Ozon title and price from JSON-LD', () async {
       final client = MockClient((request) async {
         return utf8Response('''
           <html>
@@ -62,7 +62,7 @@ void main() {
           </html>
         ''', 200);
       });
-      final importer = ProductImporter(client: client);
+      final importer = ProductImporter(client: client, enableBrowserFallback: false);
       final data = await importer.fetch(Uri.parse('https://www.wildberries.ru/catalog/1/detail.aspx'));
       expect(data.title, 'Умные часы');
       expect(data.price, 8900.5);
@@ -76,7 +76,7 @@ void main() {
           200,
         );
       });
-      final importer = ProductImporter(client: client);
+      final importer = ProductImporter(client: client, enableBrowserFallback: false);
       final data = await importer.fetch(Uri.parse('https://www.ozon.ru/product/1234567/'));
       expect(data.title, 'Товар из OZON');
       expect(data.price, 4990);
@@ -88,7 +88,7 @@ void main() {
         expect(request.url.toString(), 'https://example.com/product/abc');
         return utf8Response('<html><head><title>Example Store</title></head></html>', 200);
       });
-      final importer = ProductImporter(client: client);
+      final importer = ProductImporter(client: client, enableBrowserFallback: false);
       final data = await importer.fetch(Uri.parse('https://example.com/product/abc'));
       expect(data.title, 'Example Store');
       expect(data.price, isNull);
@@ -96,7 +96,7 @@ void main() {
 
     test('throws on HTTP error status', () async {
       final client = MockClient((request) async => http.Response('nope', 403));
-      final importer = ProductImporter(client: client);
+      final importer = ProductImporter(client: client, enableBrowserFallback: false);
       expect(importer.fetch(Uri.parse('https://example.com/')), throwsException);
     });
   });
