@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pinzon/models/archive_item.dart';
 
-defaultItem() => ArchiveItem(
+ArchiveItem defaultItem() => ArchiveItem(
       id: '1',
       url: 'https://example.com/item',
       title: '...',
