@@ -8,6 +8,7 @@ on:
       - main
       - master
       - fix/android-gradle-compat
+      - experiment/local-smart-sort
 
 permissions:
   contents: read
@@ -87,11 +88,6 @@ jobs:
           echo "Generated Gradle Wrapper:"
           ls -lh gradle/wrapper/gradle-wrapper.jar
 
-      # Если в репозитории заданы секреты с постоянным keystore,
-      # сборка подписывается им (можно публиковать в Google Play и
-      # обновлять приложение поверх предыдущих артефактов).
-      # Иначе генерируется одноразовый ключ: APK устанавливается,
-      # но такой AAB нельзя публиковать в Play.
       - name: Configure release signing
         working-directory: ${{ steps.project.outputs.project_dir }}/android
         shell: bash
