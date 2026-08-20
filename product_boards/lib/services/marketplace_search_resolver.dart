@@ -223,40 +223,38 @@ class MarketplaceSearchResolver {
     final direct = Uri.tryParse(value);
     if (direct != null && _isOzonProduct(direct)) return _canonicalProduct(direct);
 
-    final decoded = _decodeRepeated(value);
-    final candidates = _extractOzonProductUrlsFromText(decoded);
+    final candidates = _extractOzonProductUrlsFromText(value);
     return candidates.isEmpty ? null : candidates.first;
   }
 
   static List<Uri> _extractOzonProductUrlsFromText(String text) {
-    final decoded = _decodeRepeated(text);
     final matches = <Uri>[];
     final seen = <String>{};
+
+    // Search the raw document first. Do not URI-decode the entire HTML: Google
+    // pages contain arbitrary percent signs and malformed percent escapes.
     final patterns = <RegExp>[
       RegExp(
-        r'https?://(?:www\.)?ozon\.ru/product/[A-Za-z0-9\-_%./~?=&]+',
+        r'https?(?::|%3A)//(?:www\.)?ozon(?:\.ru|%2Eru)/product/[A-Za-z0-9\-_%./~?=&%]+',
         caseSensitive: false,
       ),
       RegExp(
-        r'(?<![A-Za-z0-9.-])(?:www\.)?ozon\.ru/product/[A-Za-z0-9\-_%./~?=&]+',
+        r'(?:www\.)?ozon(?:\.ru|%2Eru)/product/[A-Za-z0-9\-_%./~?=&%]+',
         caseSensitive: false,
       ),
       RegExp(
-        r'\\?/product\\?/[A-Za-z0-9\-_%./~?=&]+',
+        r'\\?/product\\?/[A-Za-z0-9\-_%./~?=&%]+',
         caseSensitive: false,
       ),
     ];
 
     for (final pattern in patterns) {
-      for (final match in pattern.allMatches(decoded)) {
+      for (final match in pattern.allMatches(text)) {
         var raw = match.group(0) ?? '';
-        raw = raw.replaceAll(r'\/', '/');
-        raw = raw.replaceAll('&amp;', '&');
+        raw = _decodeFragmentSafely(raw);
+        raw = raw.replaceAll(r'\/', '/').replaceAll('&amp;', '&');
         raw = raw.replaceAll(RegExp(r'[\\"<>\]\[,;)]+$'), '');
         if (!raw.startsWith('http')) raw = 'https://$raw';
-        if (raw.startsWith('https://ozon.ru/')) {
-          raw = 'https://www.ozon.ru/${raw.substring('https://ozon.ru/'.length)}';
-        }
 
         final uri = Uri.tryParse(raw);
         if (uri == null || !_isOzonProduct(uri)) continue;
@@ -265,8 +263,52 @@ class MarketplaceSearchResolver {
       }
     }
 
+    // Google can wrap the real URL into /url?q=... or similar redirects.
+    // Inspect each href independently and decode only the relevant parameter.
+    if (matches.isEmpty) {
+      final hrefPattern = RegExp(r'href=["\']([^"\']+)["\']', caseSensitive: false);
+      for (final match in hrefPattern.allMatches(text)) {
+        final href = match.group(1);
+        if (href == null) continue;
+        final candidate = _extractOzonProductUrlFromFragment(href);
+        if (candidate != null && seen.add(candidate.toString())) matches.add(candidate);
+      }
+    }
+
     return matches;
   }
+
+  static Uri? _extractOzonProductUrlFromFragment(String value) {
+    final decoded = _decodeFragmentSafely(value);
+    final direct = Uri.tryParse(decoded);
+    if (direct != null && _isOzonProduct(direct)) return _canonicalProduct(direct);
+
+    final match = RegExp(
+      r'https?://(?:www\.)?ozon\.ru/product/[A-Za-z0-9\-_%./~?=&]+',
+      caseSensitive: false,
+    ).firstMatch(decoded);
+    if (match == null) return null;
+
+    final uri = Uri.tryParse(_stripTrailingDelimiters(match.group(0)!));
+    return uri != null && _isOzonProduct(uri) ? _canonicalProduct(uri) : null;
+  }
+
+  static String _decodeFragmentSafely(String value) {
+    var result = value.replaceAll(r'\/', '/').replaceAll('&amp;', '&');
+    for (var i = 0; i < 2; i++) {
+      try {
+        final decoded = Uri.decodeFull(result);
+        if (decoded == result) break;
+        result = decoded;
+      } on FormatException {
+        break;
+      }
+    }
+    return result;
+  }
+
+  static String _stripTrailingDelimiters(String value) =>
+      value.replaceAll(RegExp(r'[\\"<>\]\[,;)]+$'), '');
 
   static bool _isOzonProduct(Uri uri) {
     return (uri.host == 'ozon.ru' || uri.host.endsWith('.ozon.ru')) &&
@@ -330,20 +372,6 @@ class MarketplaceSearchResolver {
   }) {
     final filtered = tokens.where((token) => !exclude.contains(token));
     return filtered.take(6).join(' ');
-  }
-
-  static String _decodeRepeated(String value) {
-    var result = value;
-    for (var i = 0; i < 2; i++) {
-      try {
-        final decoded = Uri.decodeFull(result);
-        if (decoded == result) break;
-        result = decoded;
-      } on FormatException {
-        break;
-      }
-    }
-    return result;
   }
 
   static String _clean(String? value) =>
