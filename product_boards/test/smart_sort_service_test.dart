@@ -54,14 +54,14 @@ void main() {
     expect(result.isConfident, isFalse);
   });
 
-  test('uses URL as a local classification signal', () {
+  test('uses multiple URL tokens as a local classification signal', () {
     final result = service.classify(
       _item('Товар', url: 'https://example.com/minecraft-game'),
     );
 
     expect(result.category, 'Игры');
-    expect(result.score, .35);
-    expect(result.isConfident, isFalse);
+    expect(result.score, .58);
+    expect(result.isConfident, isTrue);
   });
 
   test('returns ranked alternatives for ambiguous products', () {
