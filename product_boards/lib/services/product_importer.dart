@@ -76,6 +76,21 @@ class ProductImporter {
         ImageDiagnostics.log('WEBVIEW_START', {'url': uri.toString()});
         final result = await _browserChannel.invokeMethod<dynamic>('resolveProduct', {'url': uri.toString()});
         if (result is Map) {
+          final rawDiagnostics = result['diagnostics'];
+          if (rawDiagnostics is Iterable) {
+            for (final rawEvent in rawDiagnostics) {
+              if (rawEvent is Map) {
+                final eventData = <String, Object?>{};
+                rawEvent.forEach((key, value) => eventData[key.toString()] = value);
+                final stage = eventData.remove('stage')?.toString() ?? 'UNKNOWN';
+                ImageDiagnostics.log('WEBVIEW_EVENT', {
+                  'stage': stage,
+                  ...eventData,
+                });
+              }
+            }
+          }
+
           final browserData = ImportedProductData(
             title: _nullableString(result['title']),
             imageUrl: _nullableString(result['imageUrl']),
@@ -85,14 +100,22 @@ class ProductImporter {
           );
           ImageDiagnostics.log('WEBVIEW_RESULT', {
             'url': uri.toString(),
+            'originalUrl': _nullableString(result['originalUrl']),
+            'finalUrl': _nullableString(result['finalUrl']),
+            'pageTitle': _nullableString(result['pageTitle']),
             'title': browserData.title,
             'price': browserData.price,
             'image': browserData.imageUrl,
+            'currency': browserData.currency,
+            'reason': _nullableString(result['reason']),
+            'attempts': result['attempts'],
           });
           data = data.merge(browserData);
           if (browserData.title != null || browserData.imageUrl != null || browserData.price != null || browserData.description != null) {
             httpError = null;
           }
+        } else {
+          ImageDiagnostics.failure('WEBVIEW_EMPTY_RESULT', Exception('WebView returned ${result.runtimeType}'), url: uri.toString());
         }
       } on MissingPluginException catch (error, stackTrace) {
         ImageDiagnostics.failure('WEBVIEW_PLUGIN', error, url: uri.toString(), stackTrace: stackTrace);
@@ -156,9 +179,7 @@ class ProductImporter {
       final state = _decodeState(node.attributes['data-state']);
       if (state == null) continue;
       final candidate = _firstUsableImage(state['images']) ?? _firstUsableImage(state['items']) ?? _firstUsableImage(state['image']);
-      if (candidate != null && !_isGenericImage(candidate, uri)) {
-        image ??= candidate;
-      }
+      if (candidate != null && !_isGenericImage(candidate, uri)) image ??= candidate;
       if (image != null && !_isGenericImage(image, uri)) break;
     }
 
@@ -219,13 +240,8 @@ class ProductImporter {
     final normalizedRaw = response.body.replaceAll(RegExp(r'\\+"'), '"');
     final inlineCandidates = <String>[response.body, normalizedRaw];
     for (final inline in inlineCandidates) {
-      if (title == null) {
-        final match = RegExp(r'"name"\s*:\s*"([^"\\]{3,500})"').firstMatch(inline);
-        title = _jsonUnescape(match?.group(1));
-      } else {
-        final match = RegExp(r'"name"\s*:\s*"([^"\\]{3,500})"').firstMatch(inline);
-        title = ImportedProductData._selectTitle(title, _jsonUnescape(match?.group(1)));
-      }
+      final match = RegExp(r'"name"\s*:\s*"([^"\\]{3,500})"').firstMatch(inline);
+      title = ImportedProductData._selectTitle(title, _jsonUnescape(match?.group(1)));
       if (image == null || _isGenericImage(image, uri)) {
         final matches = RegExp(
           r'"(?:image|images)"\s*:\s*(?:\[\s*)?"(https?[^"\\]+(?:\.(?:jpg|jpeg|png|webp)|(?:\?|$))[^"\\]*)',
