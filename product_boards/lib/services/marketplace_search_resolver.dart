@@ -335,9 +335,15 @@ class MarketplaceSearchResolver {
   static String _decodeRepeated(String value) {
     var result = value;
     for (var i = 0; i < 2; i++) {
-      final decoded = Uri.decodeFull(result);
-      if (decoded == result) break;
-      result = decoded;
+      try {
+        final decoded = Uri.decodeFull(result);
+        if (decoded == result) break;
+        result = decoded;
+      } on FormatException {
+        // Search pages contain arbitrary percent signs (CSS, tracking URLs, etc.).
+        // Never let one malformed escape abort extraction of otherwise valid Ozon URLs.
+        break;
+      }
     }
     return result;
   }
