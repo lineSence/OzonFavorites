@@ -340,8 +340,6 @@ class MarketplaceSearchResolver {
         if (decoded == result) break;
         result = decoded;
       } on FormatException {
-        // Search pages contain arbitrary percent signs (CSS, tracking URLs, etc.).
-        // Never let one malformed escape abort extraction of otherwise valid Ozon URLs.
         break;
       }
     }
