@@ -3,15 +3,21 @@ import 'dart:io';
 import '../models/product_preview.dart';
 import 'image_cache_service.dart';
 import 'image_diagnostics.dart';
+import 'marketplace_search_resolver.dart';
 import 'product_importer.dart';
 
 class ProductPreviewResolver {
-  ProductPreviewResolver({ProductImporter? importer, ImageCacheService? imageCache})
-      : _importer = importer ?? ProductImporter(),
-        _imageCache = imageCache ?? ImageCacheService();
+  ProductPreviewResolver({
+    ProductImporter? importer,
+    ImageCacheService? imageCache,
+    MarketplaceSearchResolver? searchResolver,
+  })  : _importer = importer ?? ProductImporter(),
+        _imageCache = imageCache ?? ImageCacheService(),
+        _searchResolver = searchResolver ?? MarketplaceSearchResolver();
 
   final ProductImporter _importer;
   final ImageCacheService _imageCache;
+  final MarketplaceSearchResolver _searchResolver;
 
   Future<ProductPreview> resolve(
     Uri uri, {
@@ -36,7 +42,7 @@ class ProductPreviewResolver {
       ImageDiagnostics.log('OZON_SHORT_LINK', {
         'url': uri.toString(),
         'code': uri.pathSegments.last,
-        'strategy': 'http_and_webview_then_shared_intent_fallback',
+        'strategy': 'http_and_webview_then_title_search_then_shared_intent_fallback',
       });
     }
 
@@ -45,6 +51,39 @@ class ProductPreviewResolver {
       data = await _importer.fetch(uri);
     } catch (error, stackTrace) {
       ImageDiagnostics.failure('RESOLVER', error, url: uri.toString(), stackTrace: stackTrace);
+    }
+
+    Uri? resolvedProductUrl;
+    if (isOzonShortLink && sharedTitle != null && sharedTitle.trim().isNotEmpty && _needsSearchFallback(data)) {
+      final candidate = await _searchResolver.findOzonProduct(sharedTitle.trim());
+      if (candidate != null) {
+        resolvedProductUrl = candidate.url;
+        ImageDiagnostics.log('OZON_SEARCH_CANDIDATE', {
+          'sourceUrl': uri.toString(),
+          'candidateUrl': candidate.url.toString(),
+          'candidateTitle': candidate.title,
+          'score': candidate.score,
+          'engine': candidate.engine,
+        });
+        try {
+          final candidateData = await _importer.fetch(candidate.url);
+          data = data.merge(candidateData);
+          ImageDiagnostics.log('OZON_SEARCH_RESOLVE_RESULT', {
+            'candidateUrl': candidate.url.toString(),
+            'title': candidateData.title,
+            'price': candidateData.price,
+            'image': candidateData.imageUrl,
+            'success': candidateData.title != null || candidateData.price != null || candidateData.imageUrl != null,
+          });
+        } catch (error, stackTrace) {
+          ImageDiagnostics.failure('OZON_SEARCH_RESOLVE', error, url: candidate.url.toString(), stackTrace: stackTrace);
+        }
+      }
+    } else if (isOzonShortLink) {
+      ImageDiagnostics.log('OZON_SEARCH_SKIPPED', {
+        'reason': sharedTitle?.trim().isNotEmpty == true ? 'importer already returned usable product data' : 'share title missing',
+        'title': sharedTitle,
+      });
     }
 
     final title = _chooseTitle(data.title, sharedTitle, uri);
@@ -88,8 +127,9 @@ class ProductPreviewResolver {
     } else if (data.imageUrl != null && data.imageUrl!.isNotEmpty) {
       ImageDiagnostics.log('IMAGE_SOURCE_SELECTED', {
         'url': uri.toString(),
-        'source': 'importer',
+        'source': resolvedProductUrl != null ? 'ozon_search' : 'importer',
         'imageUrl': data.imageUrl,
+        'resolvedProductUrl': resolvedProductUrl?.toString(),
       });
     }
 
@@ -101,7 +141,10 @@ class ProductPreviewResolver {
       'price': data.price,
       'image': data.imageUrl,
       'localImage': localImage,
-      'imageSource': sharedImageUri?.isNotEmpty == true && localImage != null ? 'android_share_intent' : (data.imageUrl != null ? 'importer' : null),
+      'imageSource': sharedImageUri?.isNotEmpty == true && localImage != null
+          ? 'android_share_intent'
+          : (resolvedProductUrl != null && data.imageUrl != null ? 'ozon_search' : (data.imageUrl != null ? 'importer' : null)),
+      'resolvedProductUrl': resolvedProductUrl?.toString(),
       'isOzonShortLink': isOzonShortLink,
     });
 
@@ -117,11 +160,14 @@ class ProductPreviewResolver {
     );
   }
 
+  static bool _needsSearchFallback(ImportedProductData data) =>
+      data.title == null || data.price == null || data.imageUrl == null;
+
   Future<String?> _tryCache(String? imageUrl, Uri referer) async {
     if (imageUrl == null || imageUrl.isEmpty) {
       ImageDiagnostics.log('IMAGE_URL_MISSING', {
         'url': referer.toString(),
-        'reason': 'No usable image URL was returned by HTTP/WebView import',
+        'reason': 'No usable image URL was returned by HTTP/WebView/search import',
       });
       return null;
     }
@@ -167,7 +213,10 @@ class ProductPreviewResolver {
       uri.pathSegments.first.toLowerCase() == 't';
 
   static String _chooseTitle(String? imported, String? sharedTitle, Uri uri) {
-    final candidates = <String>[if (imported?.trim().isNotEmpty == true) imported!.trim(), if (sharedTitle?.trim().isNotEmpty == true) sharedTitle!.trim()];
+    final candidates = <String>[
+      if (imported?.trim().isNotEmpty == true) imported!.trim(),
+      if (sharedTitle?.trim().isNotEmpty == true) sharedTitle!.trim(),
+    ];
     if (candidates.isEmpty) return _fallbackTitle(uri);
     candidates.sort((a, b) => _scoreTitle(b).compareTo(_scoreTitle(a)));
     return candidates.first;
