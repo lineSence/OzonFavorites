@@ -52,9 +52,7 @@ class MarketplaceSearchResolver {
       }
 
       for (final candidate in candidates) {
-        if (seen.add(candidate.url.toString())) {
-          allCandidates.add(candidate);
-        }
+        if (seen.add(candidate.url.toString())) allCandidates.add(candidate);
       }
 
       final bestForQuery = candidates.reduce((a, b) => a.score >= b.score ? a : b);
@@ -196,7 +194,6 @@ class MarketplaceSearchResolver {
         ));
       }
 
-      // Google frequently embeds result URLs in script/JSON instead of href attributes.
       final fromHtml = _extractOzonProductUrlsFromText(response.body);
       for (final url in fromHtml) {
         if (!seen.add(url.toString())) continue;
@@ -255,7 +252,7 @@ class MarketplaceSearchResolver {
         var raw = match.group(0) ?? '';
         raw = raw.replaceAll(r'\/', '/');
         raw = raw.replaceAll('&amp;', '&');
-        raw = raw.replaceAll(RegExp("[\\\\\\\"'<>\\]\\[,;)]+$"), '');
+        raw = raw.replaceAll(RegExp(r'[\\"<>\]\[,;)]+$'), '');
         if (!raw.startsWith('http')) raw = 'https://$raw';
         if (raw.startsWith('https://ozon.ru/')) {
           raw = 'https://www.ozon.ru/${raw.substring('https://ozon.ru/'.length)}';
