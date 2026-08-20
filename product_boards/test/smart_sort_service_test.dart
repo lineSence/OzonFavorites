@@ -49,10 +49,11 @@ void main() {
 
   test('uses URL as a local classification signal', () {
     final result = service.classify(
-      _item('Товар', url: 'https://example.com/steam/minecraft-game'),
+      _item('Товар', url: 'https://example.com/minecraft-game'),
     );
 
     expect(result.category, 'Игры');
+    expect(result.score, .35);
     expect(result.isConfident, isFalse);
   });
 }
