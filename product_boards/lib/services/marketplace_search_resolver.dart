@@ -28,28 +28,18 @@ class MarketplaceSearchResolver {
     final cleanTitle = _clean(title);
     if (cleanTitle.length < 3) return null;
 
+    final normalizedTitle = _normalizeTitle(cleanTitle);
+    final queries = _buildQueries(cleanTitle, normalizedTitle);
+
     ImageDiagnostics.log('SEARCH_START', {
       'source': 'ozon',
       'query': cleanTitle,
-      'strategies': ['duckduckgo', 'google'],
+      'normalizedQuery': normalizedTitle,
+      'strategies': queries.map((query) => query.engine).toList(),
     });
 
-    final queries = <({String engine, Uri uri})>[
-      (
-        engine: 'duckduckgo',
-        uri: Uri.https('html.duckduckgo.com', '/html/', {
-          'q': 'site:ozon.ru/product "$cleanTitle"',
-        }),
-      ),
-      (
-        engine: 'google',
-        uri: Uri.https('www.google.com', '/search', {
-          'q': 'site:ozon.ru/product "$cleanTitle"',
-          'num': '10',
-          'hl': 'ru',
-        }),
-      ),
-    ];
+    final allCandidates = <MarketplaceSearchCandidate>[];
+    final seen = <String>{};
 
     for (final query in queries) {
       final candidates = await _search(query.engine, query.uri, cleanTitle);
@@ -61,28 +51,106 @@ class MarketplaceSearchResolver {
         continue;
       }
 
-      final best = candidates.reduce((a, b) => a.score >= b.score ? a : b);
+      for (final candidate in candidates) {
+        if (seen.add(candidate.url.toString())) {
+          allCandidates.add(candidate);
+        }
+      }
+
+      final bestForQuery = candidates.reduce((a, b) => a.score >= b.score ? a : b);
       ImageDiagnostics.log('SEARCH_CANDIDATES', {
         'engine': query.engine,
         'count': candidates.length,
-        'bestUrl': best.url.toString(),
-        'bestTitle': best.title,
-        'bestScore': best.score,
+        'bestUrl': bestForQuery.url.toString(),
+        'bestTitle': bestForQuery.title,
+        'bestScore': bestForQuery.score,
       });
-
-      if (best.score >= 0.55) {
-        ImageDiagnostics.log('SEARCH_SELECTED', {
-          'engine': query.engine,
-          'url': best.url.toString(),
-          'title': best.title,
-          'score': best.score,
-        });
-        return best;
-      }
     }
 
-    ImageDiagnostics.log('SEARCH_NOT_CONFIDENT', {'query': cleanTitle});
+    if (allCandidates.isEmpty) {
+      ImageDiagnostics.log('SEARCH_NOT_CONFIDENT', {
+        'query': cleanTitle,
+        'reason': 'no_ozon_urls_found',
+      });
+      return null;
+    }
+
+    allCandidates.sort((a, b) => b.score.compareTo(a.score));
+    final best = allCandidates.first;
+
+    ImageDiagnostics.log('SEARCH_AGGREGATED', {
+      'count': allCandidates.length,
+      'bestUrl': best.url.toString(),
+      'bestTitle': best.title,
+      'bestScore': best.score,
+    });
+
+    if (best.score >= 0.45) {
+      ImageDiagnostics.log('SEARCH_SELECTED', {
+        'engine': best.engine,
+        'url': best.url.toString(),
+        'title': best.title,
+        'score': best.score,
+      });
+      return best;
+    }
+
+    ImageDiagnostics.log('SEARCH_NOT_CONFIDENT', {
+      'query': cleanTitle,
+      'bestUrl': best.url.toString(),
+      'bestScore': best.score,
+      'reason': 'score_below_threshold',
+    });
     return null;
+  }
+
+  List<({String engine, Uri uri})> _buildQueries(
+    String cleanTitle,
+    String normalizedTitle,
+  ) {
+    final tokens = _tokens(normalizedTitle).toList(growable: false);
+    final brandToken = _guessBrand(tokens);
+
+    final queries = <({String engine, Uri uri})>[
+      (
+        engine: 'google_exact',
+        uri: Uri.https('www.google.com', '/search', {
+          'q': 'site:ozon.ru/product "$cleanTitle"',
+          'num': '10',
+          'hl': 'ru',
+        }),
+      ),
+      (
+        engine: 'google_relaxed',
+        uri: Uri.https('www.google.com', '/search', {
+          'q': 'site:ozon.ru/product $normalizedTitle',
+          'num': '10',
+          'hl': 'ru',
+        }),
+      ),
+    ];
+
+    if (brandToken != null) {
+      queries.add((
+        engine: 'google_brand',
+        uri: Uri.https('www.google.com', '/search', {
+          'q': 'site:ozon.ru/product $brandToken ${_compactSearchTokens(tokens, exclude: {brandToken})}',
+          'num': '10',
+          'hl': 'ru',
+        }),
+      ));
+    }
+
+    queries.add((
+      engine: 'google_ozon',
+      uri: Uri.https('www.google.com', '/search', {
+        'q': 'Ozon $normalizedTitle',
+        'num': '10',
+        'hl': 'ru',
+      }),
+    ));
+
+    return queries;
   }
 
   Future<List<MarketplaceSearchCandidate>> _search(
@@ -110,18 +178,32 @@ class MarketplaceSearchResolver {
       final results = <MarketplaceSearchCandidate>[];
       final seen = <String>{};
 
-      for (final link in document.querySelectorAll('a[href]')) {
-        final href = link.attributes['href'];
+      for (final node in document.querySelectorAll('a[href]')) {
+        final href = node.attributes['href'];
         final url = _extractOzonProductUrl(href);
         if (url == null || !seen.add(url.toString())) continue;
 
-        final anchorTitle = _clean(link.text);
-        final surrounding = _clean(link.parent?.text);
+        final anchorTitle = _clean(node.text);
+        final surrounding = _clean(node.parent?.text);
         final candidateTitle = anchorTitle.isNotEmpty ? anchorTitle : surrounding;
-        final score = _titleSimilarity(wantedTitle, candidateTitle);
+        final fallbackTitle = candidateTitle.isEmpty ? url.toString() : candidateTitle;
+        final score = _titleSimilarity(wantedTitle, fallbackTitle);
         results.add(MarketplaceSearchCandidate(
           url: url,
-          title: candidateTitle.isEmpty ? url.toString() : candidateTitle,
+          title: fallbackTitle,
+          score: score,
+          engine: engine,
+        ));
+      }
+
+      // Google frequently embeds result URLs in script/JSON instead of href attributes.
+      final fromHtml = _extractOzonProductUrlsFromText(response.body);
+      for (final url in fromHtml) {
+        if (!seen.add(url.toString())) continue;
+        final score = _titleSimilarity(wantedTitle, url.path);
+        results.add(MarketplaceSearchCandidate(
+          url: url,
+          title: url.path,
           score: score,
           engine: engine,
         ));
@@ -144,14 +226,49 @@ class MarketplaceSearchResolver {
     final direct = Uri.tryParse(value);
     if (direct != null && _isOzonProduct(direct)) return _canonicalProduct(direct);
 
-    final decoded = Uri.decodeFull(value);
-    final embedded = RegExp(r'https?://(?:www\.)?ozon\.ru/product/[^\s&<>]+', caseSensitive: false)
-        .firstMatch(decoded)
-        ?.group(0);
-    if (embedded == null) return null;
+    final decoded = _decodeRepeated(value);
+    final candidates = _extractOzonProductUrlsFromText(decoded);
+    return candidates.isEmpty ? null : candidates.first;
+  }
 
-    final uri = Uri.tryParse(embedded);
-    return uri != null && _isOzonProduct(uri) ? _canonicalProduct(uri) : null;
+  static List<Uri> _extractOzonProductUrlsFromText(String text) {
+    final decoded = _decodeRepeated(text);
+    final matches = <Uri>[];
+    final seen = <String>{};
+    final patterns = <RegExp>[
+      RegExp(
+        r'https?://(?:www\.)?ozon\.ru/product/[A-Za-z0-9\-_%./~?=&]+',
+        caseSensitive: false,
+      ),
+      RegExp(
+        r'(?<![A-Za-z0-9.-])(?:www\.)?ozon\.ru/product/[A-Za-z0-9\-_%./~?=&]+',
+        caseSensitive: false,
+      ),
+      RegExp(
+        r'\\?/product\\?/[A-Za-z0-9\-_%./~?=&]+',
+        caseSensitive: false,
+      ),
+    ];
+
+    for (final pattern in patterns) {
+      for (final match in pattern.allMatches(decoded)) {
+        var raw = match.group(0) ?? '';
+        raw = raw.replaceAll(r'\/', '/');
+        raw = raw.replaceAll('&amp;', '&');
+        raw = raw.replaceAll(RegExp(r'[\\"\'<>\]\[,;)]+$'), '');
+        if (!raw.startsWith('http')) raw = 'https://$raw';
+        if (raw.startsWith('https://ozon.ru/')) {
+          raw = 'https://www.ozon.ru/${raw.substring('https://ozon.ru/'.length)}';
+        }
+
+        final uri = Uri.tryParse(raw);
+        if (uri == null || !_isOzonProduct(uri)) continue;
+        final canonical = _canonicalProduct(uri);
+        if (seen.add(canonical.toString())) matches.add(canonical);
+      }
+    }
+
+    return matches;
   }
 
   static bool _isOzonProduct(Uri uri) {
@@ -168,8 +285,8 @@ class MarketplaceSearchResolver {
   }
 
   static double _titleSimilarity(String wanted, String candidate) {
-    final a = _tokens(wanted);
-    final b = _tokens(candidate);
+    final a = _tokens(_normalizeTitle(wanted));
+    final b = _tokens(_normalizeTitle(candidate));
     if (a.isEmpty || b.isEmpty) return 0;
 
     final common = a.intersection(b).length;
@@ -183,14 +300,49 @@ class MarketplaceSearchResolver {
     return (f1 + languageBonus).clamp(0, 1).toDouble();
   }
 
+  static String _normalizeTitle(String value) {
+    var normalized = value.toLowerCase().replaceAll('ё', 'е');
+    normalized = normalized
+        .replaceAll(RegExp(r'(\d+(?:[.,]\d+)?)\s*(?:г|гр|грамм|gram|grams)\b'), r'\1g')
+        .replaceAll(RegExp(r'(\d+(?:[.,]\d+)?)\s*(?:кг|килограмм|kilogram|kg)\b'), r'\1kg')
+        .replaceAll(RegExp(r'(\d+(?:[.,]\d+)?)\s*(?:мл|миллилитр|миллилитров|ml)\b'), r'\1ml')
+        .replaceAll(RegExp(r'(\d+(?:[.,]\d+)?)\s*(?:л|литр|литров|l)\b'), r'\1l')
+        .replaceAll(RegExp(r'[^\p{L}\p{N}]+', unicode: true), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    return normalized;
+  }
+
   static Set<String> _tokens(String value) {
     return value
-        .toLowerCase()
-        .replaceAll('ё', 'е')
-        .replaceAll(RegExp(r'[^\p{L}\p{N}]+', unicode: true), ' ')
         .split(RegExp(r'\s+'))
         .where((token) => token.length >= 2)
         .toSet();
+  }
+
+  static String? _guessBrand(List<String> tokens) {
+    for (final token in tokens) {
+      if (RegExp(r'^[a-z0-9]{4,}$').hasMatch(token)) return token;
+    }
+    return null;
+  }
+
+  static String _compactSearchTokens(
+    List<String> tokens, {
+    Set<String> exclude = const {},
+  }) {
+    final filtered = tokens.where((token) => !exclude.contains(token));
+    return filtered.take(6).join(' ');
+  }
+
+  static String _decodeRepeated(String value) {
+    var result = value;
+    for (var i = 0; i < 2; i++) {
+      final decoded = Uri.decodeFull(result);
+      if (decoded == result) break;
+      result = decoded;
+    }
+    return result;
   }
 
   static String _clean(String? value) =>
