@@ -4,7 +4,11 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.webkit.CookieManager
+import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
@@ -27,6 +31,9 @@ class MainActivity : FlutterActivity() {
     private var activeBrowser: WebView? = null
     private var browserFinished = false
     private var browserAttempt = 0
+    private val browserEvents = mutableListOf<Map<String, Any?>>()
+    private var browserFinalUrl: String? = null
+    private var browserPageTitle: String? = null
 
     private data class BrowserRequest(
         val url: String,
@@ -113,39 +120,128 @@ class MainActivity : FlutterActivity() {
         activeBrowserRequest = browserQueue.removeFirst()
         browserFinished = false
         browserAttempt = 0
+        browserEvents.clear()
+        browserFinalUrl = null
+        browserPageTitle = null
 
         val request = activeBrowserRequest ?: return
+        logBrowserEvent("START", mapOf("originalUrl" to request.url))
+
         val webView = WebView(this)
         activeBrowser = webView
+        val cookieManager = CookieManager.getInstance()
+        cookieManager.setAcceptCookie(true)
+        cookieManager.setAcceptThirdPartyCookies(webView, true)
+
         webView.settings.javaScriptEnabled = true
         webView.settings.domStorageEnabled = true
         webView.settings.databaseEnabled = true
         webView.settings.loadsImagesAutomatically = true
         webView.settings.allowContentAccess = true
         webView.settings.allowFileAccess = true
-        webView.settings.userAgentString = "Mozilla/5.0 (Linux; Android 14; K) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36"
+        webView.settings.javaScriptCanOpenWindowsAutomatically = true
+        webView.settings.cacheMode = WebSettings.LOAD_DEFAULT
+        webView.settings.userAgentString = "Mozilla/5.0 (Linux; Android 14; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
         webView.alpha = 0f
-        webView.layoutParams = FrameLayout.LayoutParams(1, 1)
+        webView.layoutParams = FrameLayout.LayoutParams(720, 1280)
+        webView.isVerticalScrollBarEnabled = false
+        webView.isHorizontalScrollBarEnabled = false
 
         (findViewById<FrameLayout>(android.R.id.content))?.addView(webView)
         webView.webViewClient = object : WebViewClient() {
+            override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                browserFinalUrl = url ?: browserFinalUrl
+                logBrowserEvent("PAGE_STARTED", mapOf(
+                    "url" to url,
+                    "title" to view?.title,
+                ))
+            }
+
             override fun onPageFinished(view: WebView?, url: String?) {
+                browserFinalUrl = view?.url ?: url ?: browserFinalUrl
+                browserPageTitle = view?.title
+                logBrowserEvent("PAGE_FINISHED", mapOf(
+                    "url" to browserFinalUrl,
+                    "title" to browserPageTitle,
+                    "attempt" to browserAttempt,
+                ))
                 browserHandler.postDelayed({ extractBrowserData(webView) }, 2200L)
             }
 
-            override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean = false
+            override fun onReceivedHttpError(view: WebView?, request: WebResourceRequest?, errorResponse: WebResourceResponse?) {
+                if (request?.isForMainFrame == true) {
+                    logBrowserEvent("MAIN_FRAME_HTTP_ERROR", mapOf(
+                        "url" to request.url.toString(),
+                        "status" to errorResponse?.statusCode,
+                        "reason" to errorResponse?.reasonPhrase,
+                        "contentType" to errorResponse?.mimeType,
+                    ))
+                }
+            }
+
+            override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
+                if (request?.isForMainFrame == true) {
+                    logBrowserEvent("MAIN_FRAME_LOAD_ERROR", mapOf(
+                        "url" to request.url.toString(),
+                        "code" to error?.errorCode,
+                        "description" to error?.description?.toString(),
+                    ))
+                }
+            }
+
+            override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                if (request != null) {
+                    browserFinalUrl = request.url.toString()
+                    logBrowserEvent("REDIRECT", mapOf(
+                        "url" to request.url.toString(),
+                        "isMainFrame" to request.isForMainFrame,
+                    ))
+                }
+                return false
+            }
         }
 
         browserHandler.postDelayed({
-            if (!browserFinished) finishBrowserResolve(null)
-        }, 18000L)
+            if (!browserFinished) {
+                logBrowserEvent("TIMEOUT", mapOf(
+                    "originalUrl" to request.url,
+                    "finalUrl" to browserFinalUrl,
+                    "attempts" to browserAttempt,
+                ))
+                finishBrowserResolve(null, "timeout")
+            }
+        }, 20000L)
 
-        webView.loadUrl(request.url)
+        try {
+            webView.loadUrl(request.url)
+            logBrowserEvent("LOAD_URL", mapOf("url" to request.url))
+        } catch (error: Exception) {
+            logBrowserEvent("LOAD_URL_EXCEPTION", mapOf(
+                "url" to request.url,
+                "error" to error.toString(),
+            ))
+            finishBrowserResolve(null, "loadUrl_exception")
+        }
+    }
+
+    private fun logBrowserEvent(stage: String, details: Map<String, Any?> = emptyMap()) {
+        val event = linkedMapOf<String, Any?>(
+            "stage" to stage,
+            "timestampMs" to System.currentTimeMillis(),
+        )
+        event.putAll(details)
+        browserEvents.add(event)
+        if (browserEvents.size > 200) browserEvents.removeAt(0)
     }
 
     private fun extractBrowserData(webView: WebView) {
         if (browserFinished) return
         browserAttempt++
+        logBrowserEvent("JS_EXTRACT_START", mapOf(
+            "attempt" to browserAttempt,
+            "url" to webView.url,
+            "title" to webView.title,
+        ))
 
         val script = """
             (function() {
@@ -271,48 +367,121 @@ class MainActivity : FlutterActivity() {
                 if (!Number.isNaN(parsed) && parsed > 0 && parsed < 100000000) price = parsed;
               }
 
-              return JSON.stringify({title, imageUrl:image, price, currency, description:meta('og:description') || meta('twitter:description'), host});
+              return JSON.stringify({
+                title,
+                imageUrl:image,
+                price,
+                currency,
+                description:meta('og:description') || meta('twitter:description'),
+                host,
+                finalUrl:location.href,
+                pageTitle:clean(document.title),
+                readyState:document.readyState,
+                bodyLength:document.body?.innerText?.length || 0,
+                scriptCount:document.scripts?.length || 0,
+              });
             })();
         """.trimIndent()
 
-        webView.evaluateJavascript("window.scrollTo(0, Math.min(document.body.scrollHeight, 1400)); $script") { rawResult ->
-            try {
-                val jsonString = JSONTokener(rawResult ?: "null").nextValue()
-                val json = if (jsonString is String) org.json.JSONObject(jsonString) else null
-                val result = if (json != null) {
-                    val price = if (json.has("price") && !json.isNull("price")) json.getDouble("price") else null
-                    mapOf(
-                        "title" to json.optString("title", null),
-                        "imageUrl" to json.optString("imageUrl", null),
-                        "price" to price,
-                        "currency" to json.optString("currency", null),
-                        "description" to json.optString("description", null),
-                    )
-                } else null
-                val hasUsefulData = result?.values?.any { it != null && it.toString().isNotBlank() && it.toString() != "null" } == true
-                if (!hasUsefulData && browserAttempt < 3) {
-                    browserHandler.postDelayed({ extractBrowserData(webView) }, 1800L)
-                } else {
-                    finishBrowserResolve(result)
-                }
-            } catch (_: Exception) {
-                if (browserAttempt < 3) {
-                    browserHandler.postDelayed({ extractBrowserData(webView) }, 1800L)
-                } else {
-                    finishBrowserResolve(null)
+        try {
+            webView.evaluateJavascript("window.scrollTo(0, Math.min(document.body.scrollHeight, 1400)); $script") { rawResult ->
+                browserHandler.post {
+                    try {
+                        if (rawResult.isNullOrBlank() || rawResult == "null") {
+                            logBrowserEvent("JS_RESULT_EMPTY", mapOf("attempt" to browserAttempt, "url" to webView.url))
+                            scheduleRetryOrFinish(webView, null, "js_empty")
+                            return@post
+                        }
+                        val jsonString = JSONTokener(rawResult).nextValue()
+                        val json = if (jsonString is String) org.json.JSONObject(jsonString) else null
+                        if (json == null) {
+                            logBrowserEvent("JS_JSON_INVALID", mapOf("attempt" to browserAttempt, "rawLength" to rawResult.length))
+                            scheduleRetryOrFinish(webView, null, "js_json_invalid")
+                            return@post
+                        }
+                        browserFinalUrl = json.optString("finalUrl", null) ?: webView.url ?: browserFinalUrl
+                        browserPageTitle = json.optString("pageTitle", null) ?: webView.title ?: browserPageTitle
+                        val price = if (json.has("price") && !json.isNull("price")) json.getDouble("price") else null
+                        val result = mapOf<String, Any?>(
+                            "title" to json.optString("title", null),
+                            "imageUrl" to json.optString("imageUrl", null),
+                            "price" to price,
+                            "currency" to json.optString("currency", null),
+                            "description" to json.optString("description", null),
+                        )
+                        logBrowserEvent("JS_RESULT", mapOf(
+                            "attempt" to browserAttempt,
+                            "finalUrl" to browserFinalUrl,
+                            "pageTitle" to browserPageTitle,
+                            "title" to result["title"],
+                            "imageUrl" to result["imageUrl"],
+                            "price" to result["price"],
+                            "currency" to result["currency"],
+                            "readyState" to json.optString("readyState", null),
+                            "bodyLength" to json.optInt("bodyLength", 0),
+                            "scriptCount" to json.optInt("scriptCount", 0),
+                        ))
+                        val hasUsefulData = result.values.any { it != null && it.toString().isNotBlank() && it.toString() != "null" }
+                        if (!hasUsefulData && browserAttempt < 3) {
+                            browserHandler.postDelayed({ extractBrowserData(webView) }, 1800L)
+                        } else {
+                            finishBrowserResolve(result, if (hasUsefulData) "success" else "no_data")
+                        }
+                    } catch (error: Exception) {
+                        logBrowserEvent("JS_PARSE_EXCEPTION", mapOf(
+                            "attempt" to browserAttempt,
+                            "error" to error.toString(),
+                            "url" to webView.url,
+                        ))
+                        scheduleRetryOrFinish(webView, null, "js_parse_exception")
+                    }
                 }
             }
+        } catch (error: Exception) {
+            logBrowserEvent("JS_EVALUATE_EXCEPTION", mapOf(
+                "attempt" to browserAttempt,
+                "error" to error.toString(),
+                "url" to webView.url,
+            ))
+            scheduleRetryOrFinish(webView, null, "js_evaluate_exception")
         }
     }
 
-    private fun finishBrowserResolve(data: Map<String, Any?>?) {
+    private fun scheduleRetryOrFinish(webView: WebView, data: Map<String, Any?>?, reason: String) {
+        if (browserFinished) return
+        if (browserAttempt < 3) {
+            browserHandler.postDelayed({ extractBrowserData(webView) }, 1800L)
+        } else {
+            finishBrowserResolve(data, reason)
+        }
+    }
+
+    private fun finishBrowserResolve(data: Map<String, Any?>?, reason: String) {
         if (browserFinished) return
         browserFinished = true
+        val request = activeBrowserRequest
+        val payload = linkedMapOf<String, Any?>()
+        if (data != null) payload.putAll(data)
+        payload["originalUrl"] = request?.url
+        payload["finalUrl"] = browserFinalUrl ?: activeBrowser?.url
+        payload["pageTitle"] = browserPageTitle ?: activeBrowser?.title
+        payload["reason"] = reason
+        payload["attempts"] = browserAttempt
+        payload["diagnostics"] = browserEvents.toList()
+        logBrowserEvent("FINISH", mapOf(
+            "reason" to reason,
+            "originalUrl" to request?.url,
+            "finalUrl" to payload["finalUrl"],
+            "pageTitle" to payload["pageTitle"],
+            "attempts" to browserAttempt,
+        ))
+        payload["diagnostics"] = browserEvents.toList()
+
         activeBrowser?.stopLoading()
         (activeBrowser?.parent as? FrameLayout)?.removeView(activeBrowser)
         activeBrowser?.destroy()
         activeBrowser = null
-        activeBrowserRequest?.result?.success(data)
+        request?.result?.success(payload)
         activeBrowserRequest = null
         browserHandler.removeCallbacksAndMessages(null)
         startNextBrowserResolve()
