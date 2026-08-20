@@ -237,7 +237,7 @@ class MainActivity : FlutterActivity() {
 
         val screenshotAllowed = isScreenshotAllowed(browserFinalUrl, browserPageTitle)
         if (screenshotAllowed) {
-            browserScreenshotUri = captureWebViewScreenshot(webView)
+            prepareWebViewForScreenshot(webView)
         } else {
             logBrowserEvent("SCREENSHOT_SKIPPED", mapOf(
                 "reason" to "error_or_antibot_page",
@@ -355,6 +355,41 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    private fun prepareWebViewForScreenshot(webView: WebView) {
+        val heightScript = """
+            (function() {
+              const height = Math.max(
+                document.documentElement?.scrollHeight || 0,
+                document.body?.scrollHeight || 0,
+                document.documentElement?.offsetHeight || 0
+              );
+              return Math.min(Math.max(height, 1600), 2800);
+            })();
+        """.trimIndent()
+        try {
+            webView.evaluateJavascript(heightScript) { rawHeight ->
+                val contentHeight = rawHeight?.toIntOrNull()?.coerceIn(1600, 2800) ?: 1600
+                webView.post {
+                    val params = webView.layoutParams as? FrameLayout.LayoutParams
+                    if (params != null) {
+                        params.width = 900
+                        params.height = contentHeight
+                        webView.layoutParams = params
+                    }
+                    logBrowserEvent("SCREENSHOT_LAYOUT", mapOf(
+                        "width" to 900,
+                        "height" to contentHeight,
+                        "contentHeight" to rawHeight,
+                    ))
+                    webView.postDelayed({ browserScreenshotUri = captureWebViewScreenshot(webView) }, 250L)
+                }
+            }
+        } catch (error: Exception) {
+            logBrowserEvent("SCREENSHOT_LAYOUT_FAIL", mapOf("error" to error.toString()))
+            browserScreenshotUri = captureWebViewScreenshot(webView)
+        }
+    }
+
     private fun isScreenshotAllowed(url: String?, title: String?): Boolean {
         val u = (url ?: "").lowercase()
         val t = (title ?: "").lowercase()
@@ -428,34 +463,43 @@ class MainActivity : FlutterActivity() {
         payload["diagnostics"] = browserEvents.toList()
         logBrowserEvent("FINISH", mapOf(
             "reason" to reason,
-            "originalUrl" to request?.url,
             "finalUrl" to payload["finalUrl"],
-            "pageTitle" to payload["pageTitle"],
+            "title" to payload["title"],
+            "price" to payload["price"],
             "screenshotUri" to payload["screenshotUri"],
-            "attempts" to browserAttempt,
         ))
-        payload["diagnostics"] = browserEvents.toList()
 
-        activeBrowser?.stopLoading()
-        (activeBrowser?.parent as? FrameLayout)?.removeView(activeBrowser)
-        activeBrowser?.destroy()
+        try {
+            request?.result?.success(payload)
+        } catch (_: Exception) {
+        }
+
+        activeBrowser?.let { view ->
+            (view.parent as? FrameLayout)?.removeView(view)
+            view.stopLoading()
+            view.destroy()
+        }
         activeBrowser = null
-        request?.result?.success(payload)
         activeBrowserRequest = null
-        browserHandler.removeCallbacksAndMessages(null)
-        startNextBrowserResolve()
+        browserHandler.post { startNextBrowserResolve() }
+    }
+
+    private fun getParcelableExtra(intent: Intent): Uri? {
+        return try {
+            if (android.os.Build.VERSION.SDK_INT >= 33) {
+                intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                intent.getParcelableExtra(Intent.EXTRA_STREAM)
+            }
+        } catch (_: Exception) {
+            null
+        }
     }
 
     private fun extractUrl(text: String): String? {
-        val regex = Regex("https?://[^\\s]+", RegexOption.IGNORE_CASE)
-        return regex.find(text)?.value?.trimEnd('.', ',', ';', ')', ']', '}')
+        if (text.isBlank()) return null
+        val match = Regex("https?://[^\\s<>]+", RegexOption.IGNORE_CASE).find(text)
+        return match?.value?.trimEnd('.', ',', ';', ')', ']', '}')
     }
-
-    @Suppress("DEPRECATION")
-    private fun getParcelableExtra(intent: Intent): Uri? =
-        if (android.os.Build.VERSION.SDK_INT >= 33) {
-            intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
-        } else {
-            intent.getParcelableExtra(Intent.EXTRA_STREAM)
-        }
 }
