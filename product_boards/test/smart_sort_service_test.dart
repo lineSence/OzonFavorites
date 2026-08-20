@@ -1,16 +1,23 @@
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:pinzon/models/archive_item.dart';
+import 'package:pinzon/services/product_features.dart';
 import 'package:pinzon/services/smart_sort_service.dart';
 
-ArchiveItem _item(String title, {String note = '', String url = 'https://example.com'}) {
+ArchiveItem _item(
+  String title, {
+  String note = '',
+  String url = 'https://example.com',
+  String? imageUrl,
+}) {
   final now = DateTime(2026, 1, 1);
   return ArchiveItem(
     id: title,
     url: url,
     title: title,
     titleSource: TitleSource.automatic,
-    imageStatus: ImageStatus.failed,
+    imageUrl: imageUrl,
+    imageStatus: imageUrl == null ? ImageStatus.failed : ImageStatus.success,
     note: note,
     categoryId: null,
     metadataStatus: MetadataStatus.success,
@@ -55,5 +62,29 @@ void main() {
     expect(result.category, 'Игры');
     expect(result.score, .35);
     expect(result.isConfident, isFalse);
+  });
+
+  test('returns alternatives for ambiguous products', () {
+    final result = service.classify(
+      _item('Спортивная куртка для бега'),
+    );
+
+    expect(result.category, 'Одежда');
+    expect(result.alternatives, isNotEmpty);
+    expect(result.alternatives.first.category, 'Спорт');
+  });
+
+  test('builds product features with marketplace and image signals', () {
+    final features = ProductFeatures.fromItem(
+      _item(
+        'Товар',
+        url: 'https://www.ozon.ru/product/example',
+        imageUrl: 'https://cdn.example.com/image.jpg',
+      ),
+    );
+
+    expect(features.source, 'ozon');
+    expect(features.hasImage, isTrue);
+    expect(features.text, 'Товар');
   });
 }
