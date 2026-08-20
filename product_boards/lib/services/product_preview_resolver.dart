@@ -33,117 +33,113 @@ class ProductPreviewResolver {
       'sharedTitlePresent': sharedTitle?.trim().isNotEmpty == true,
       'sharedTitle': sharedTitle,
       'sharedImagePresent': sharedImageUri?.trim().isNotEmpty == true,
-      'sharedImageUri': sharedImageUri,
       'isOzonShortLink': isOzonShortLink,
       'shortLinkCode': isOzonShortLink ? uri.pathSegments.last : null,
+      'imageStrategy': 'webview_screenshot',
     });
-
-    if (isOzonShortLink) {
-      ImageDiagnostics.log('OZON_SHORT_LINK', {
-        'url': uri.toString(),
-        'code': uri.pathSegments.last,
-        'strategy': 'http_and_webview_then_title_search_then_shared_intent_fallback',
-      });
-    }
 
     ImportedProductData data = const ImportedProductData();
     try {
       data = await _importer.fetch(uri);
     } catch (error, stackTrace) {
-      ImageDiagnostics.failure('RESOLVER', error, url: uri.toString(), stackTrace: stackTrace);
+      ImageDiagnostics.failure('RESOLVER_IMPORT', error, url: uri.toString(), stackTrace: stackTrace);
     }
 
-    Uri? resolvedProductUrl;
-    if (isOzonShortLink && sharedTitle != null && sharedTitle.trim().isNotEmpty && _needsSearchFallback(data)) {
-      final candidate = await _searchResolver.findOzonProduct(sharedTitle.trim());
-      if (candidate != null) {
-        resolvedProductUrl = candidate.url;
-        ImageDiagnostics.log('OZON_SEARCH_CANDIDATE', {
-          'sourceUrl': uri.toString(),
-          'candidateUrl': candidate.url.toString(),
-          'candidateTitle': candidate.title,
-          'score': candidate.score,
-          'engine': candidate.engine,
-        });
-        try {
-          final candidateData = await _importer.fetch(candidate.url);
-          data = data.merge(candidateData);
-          ImageDiagnostics.log('OZON_SEARCH_RESOLVE_RESULT', {
-            'candidateUrl': candidate.url.toString(),
-            'title': candidateData.title,
-            'price': candidateData.price,
-            'image': candidateData.imageUrl,
-            'success': candidateData.title != null || candidateData.price != null || candidateData.imageUrl != null,
-          });
-        } catch (error, stackTrace) {
-          ImageDiagnostics.failure('OZON_SEARCH_RESOLVE', error, url: candidate.url.toString(), stackTrace: stackTrace);
-        }
-      }
-    } else if (isOzonShortLink) {
-      ImageDiagnostics.log('OZON_SEARCH_SKIPPED', {
-        'reason': sharedTitle?.trim().isNotEmpty == true ? 'importer already returned usable product data' : 'share title missing',
-        'title': sharedTitle,
+    Uri? resolvedProductUrl =
+        data.resolvedUrl != null ? Uri.tryParse(data.resolvedUrl!) : null;
+
+    // For Ozon short links, search is only a URL/data fallback. The image is
+    // still always produced by opening the candidate in WebView and taking a
+    // screenshot; no remote image URL is used.
+    if (isOzonShortLink &&
+        data.screenshotUri == null &&
+        sharedTitle?.trim().isNotEmpty == true) {
+      ImageDiagnostics.log('OZON_SEARCH_FALLBACK_START', {
+        'url': uri.toString(),
+        'title': sharedTitle!.trim(),
       });
+      try {
+        final candidate = await _searchResolver.findOzonProduct(sharedTitle.trim());
+        if (candidate != null) {
+          resolvedProductUrl = candidate.url;
+          ImageDiagnostics.log('OZON_SEARCH_CANDIDATE', {
+            'sourceUrl': uri.toString(),
+            'candidateUrl': candidate.url.toString(),
+            'candidateTitle': candidate.title,
+            'score': candidate.score,
+            'engine': candidate.engine,
+          });
+
+          try {
+            final candidateData = await _importer.fetch(candidate.url);
+            data = data.merge(candidateData);
+            ImageDiagnostics.log('OZON_SCREENSHOT_RESOLVE_RESULT', {
+              'candidateUrl': candidate.url.toString(),
+              'title': candidateData.title,
+              'price': candidateData.price,
+              'screenshotUri': candidateData.screenshotUri,
+              'resolvedUrl': candidateData.resolvedUrl,
+              'success': candidateData.screenshotUri != null,
+            });
+          } catch (error, stackTrace) {
+            ImageDiagnostics.failure(
+              'OZON_SCREENSHOT_RESOLVE',
+              error,
+              url: candidate.url.toString(),
+              stackTrace: stackTrace,
+            );
+          }
+        } else {
+          ImageDiagnostics.log('OZON_SEARCH_NOT_FOUND', {
+            'url': uri.toString(),
+            'title': sharedTitle.trim(),
+          });
+        }
+      } catch (error, stackTrace) {
+        ImageDiagnostics.failure('OZON_SEARCH_FALLBACK', error, url: uri.toString(), stackTrace: stackTrace);
+      }
     }
 
     final title = _chooseTitle(data.title, sharedTitle, uri);
-    if (sharedTitle != null && sharedTitle.trim().isNotEmpty) {
+    if (sharedTitle?.trim().isNotEmpty == true) {
       ImageDiagnostics.log('SHARED_TITLE', {
         'url': uri.toString(),
-        'title': sharedTitle.trim(),
+        'title': sharedTitle!.trim(),
         'selectedTitle': title,
         'importedTitle': data.title,
       });
     }
 
     String? localImage;
-    if (sharedImageUri != null && sharedImageUri.isNotEmpty) {
-      final sharedFile = _describeLocalFile(sharedImageUri);
-      ImageDiagnostics.log('SHARED_IMAGE_INPUT', {
+    if (data.screenshotUri != null && data.screenshotUri!.isNotEmpty) {
+      ImageDiagnostics.log('SCREENSHOT_SOURCE_SELECTED', {
         'url': uri.toString(),
-        'sharedImageUri': sharedImageUri,
-        ...sharedFile,
+        'source': 'webview_screenshot',
+        'screenshotUri': data.screenshotUri,
+        'resolvedProductUrl': resolvedProductUrl?.toString(),
       });
-      localImage = await _imageCache.cacheLocalUri(sharedImageUri);
-      ImageDiagnostics.log('SHARED_IMAGE_RESULT', {
+      localImage = await _imageCache.cacheLocalUri(data.screenshotUri!);
+      ImageDiagnostics.log('SCREENSHOT_CACHE_RESULT', {
         'url': uri.toString(),
-        'sharedImageUri': sharedImageUri,
-        'path': localImage,
+        'screenshotUri': data.screenshotUri,
+        'localImage': localImage,
         'success': localImage != null,
       });
     } else {
-      ImageDiagnostics.log('SHARED_IMAGE_ABSENT', {
+      ImageDiagnostics.log('SCREENSHOT_MISSING', {
         'url': uri.toString(),
-        'reason': 'Android Share Intent did not provide a local image URI',
-      });
-    }
-
-    if (localImage != null) {
-      ImageDiagnostics.log('IMAGE_SOURCE_SELECTED', {
-        'url': uri.toString(),
-        'source': 'android_share_intent',
-        'path': localImage,
-      });
-    } else if (data.imageUrl != null && data.imageUrl!.isNotEmpty) {
-      ImageDiagnostics.log('IMAGE_SOURCE_SELECTED', {
-        'url': uri.toString(),
-        'source': resolvedProductUrl != null ? 'ozon_search' : 'importer',
-        'imageUrl': data.imageUrl,
+        'reason': 'WebView did not return a usable screenshot',
         'resolvedProductUrl': resolvedProductUrl?.toString(),
       });
     }
-
-    localImage ??= await _tryCache(data.imageUrl, uri);
 
     ImageDiagnostics.log('PREVIEW_RESULT', {
       'url': uri.toString(),
       'title': title,
       'price': data.price,
-      'image': data.imageUrl,
+      'image': null,
       'localImage': localImage,
-      'imageSource': sharedImageUri?.isNotEmpty == true && localImage != null
-          ? 'android_share_intent'
-          : (resolvedProductUrl != null && data.imageUrl != null ? 'ozon_search' : (data.imageUrl != null ? 'importer' : null)),
+      'imageSource': localImage != null ? 'webview_screenshot' : null,
       'resolvedProductUrl': resolvedProductUrl?.toString(),
       'isOzonShortLink': isOzonShortLink,
     });
@@ -152,59 +148,12 @@ class ProductPreviewResolver {
       url: uri,
       title: title,
       description: data.description,
-      imageUrl: data.imageUrl,
+      imageUrl: null,
       localImageUri: localImage,
       price: data.price,
       currency: data.currency ?? '₽',
       siteName: _siteName(uri),
     );
-  }
-
-  static bool _needsSearchFallback(ImportedProductData data) =>
-      data.title == null || data.price == null || data.imageUrl == null;
-
-  Future<String?> _tryCache(String? imageUrl, Uri referer) async {
-    if (imageUrl == null || imageUrl.isEmpty) {
-      ImageDiagnostics.log('IMAGE_URL_MISSING', {
-        'url': referer.toString(),
-        'reason': 'No usable image URL was returned by HTTP/WebView/search import',
-      });
-      return null;
-    }
-    final cached = await _imageCache.cacheUrl(imageUrl, referer: referer);
-    ImageDiagnostics.log('IMAGE_URL_CACHE_RESULT', {
-      'url': referer.toString(),
-      'imageUrl': imageUrl,
-      'success': cached != null,
-      'localImage': cached,
-    });
-    return cached;
-  }
-
-  static Map<String, Object?> _describeLocalFile(String value) {
-    try {
-      final uri = Uri.tryParse(value);
-      if (uri?.scheme != 'file') {
-        return {
-          'scheme': uri?.scheme,
-          'exists': false,
-          'reason': 'shared URI is not file://',
-        };
-      }
-      final file = File(uri!.toFilePath());
-      final exists = file.existsSync();
-      return {
-        'scheme': 'file',
-        'path': file.path,
-        'exists': exists,
-        'bytes': exists ? file.lengthSync() : null,
-      };
-    } catch (error) {
-      return {
-        'exists': false,
-        'describeError': error.toString(),
-      };
-    }
   }
 
   static bool _isOzonShortLink(Uri uri) =>
@@ -238,5 +187,27 @@ class ProductPreviewResolver {
     return uri.host;
   }
 
-  static String _fallbackTitle(Uri uri) => uri.pathSegments.isNotEmpty ? uri.pathSegments.last : uri.host;
+  static String _fallbackTitle(Uri uri) =>
+      uri.pathSegments.isNotEmpty ? uri.pathSegments.last : uri.host;
+
+  // Kept for callers that may inspect a local share URI; screenshot capture is
+  // intentionally the canonical cover source for this importer.
+  static Map<String, Object?> describeSharedImage(String value) {
+    try {
+      final uri = Uri.tryParse(value);
+      if (uri?.scheme != 'file') {
+        return {'scheme': uri?.scheme, 'exists': false};
+      }
+      final file = File(uri!.toFilePath());
+      final exists = file.existsSync();
+      return {
+        'scheme': 'file',
+        'path': file.path,
+        'exists': exists,
+        'bytes': exists ? file.lengthSync() : null,
+      };
+    } catch (error) {
+      return {'exists': false, 'error': error.toString()};
+    }
+  }
 }
