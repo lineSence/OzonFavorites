@@ -1,4 +1,9 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
+
 import '../services/image_diagnostics.dart';
 
 class ImageDiagnosticsScreen extends StatefulWidget {
@@ -9,6 +14,8 @@ class ImageDiagnosticsScreen extends StatefulWidget {
 }
 
 class _ImageDiagnosticsScreenState extends State<ImageDiagnosticsScreen> {
+  bool exporting = false;
+
   @override
   void initState() {
     super.initState();
@@ -25,6 +32,31 @@ class _ImageDiagnosticsScreenState extends State<ImageDiagnosticsScreen> {
     if (mounted) setState(() {});
   }
 
+  Future<void> _exportLog() async {
+    if (exporting) return;
+    setState(() => exporting = true);
+    try {
+      final directory = await getTemporaryDirectory();
+      final timestamp = DateTime.now().toUtc().toIso8601String().replaceAll(RegExp(r'[:.]'), '-');
+      final file = File('${directory.path}/pinzon_diagnostics_$timestamp.json');
+      await file.writeAsString(ImageDiagnostics.exportJson(platform: Platform.operatingSystem));
+      await SharePlus.instance.share(
+        ShareParams(
+          text: 'Pinzon — диагностический лог импорта товаров',
+          files: [XFile(file.path, mimeType: 'application/json')],
+        ),
+      );
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(SnackBar(content: Text('Не удалось выгрузить лог: $error')));
+      }
+    } finally {
+      if (mounted) setState(() => exporting = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final entries = ImageDiagnostics.entries;
@@ -36,6 +68,13 @@ class _ImageDiagnosticsScreenState extends State<ImageDiagnosticsScreen> {
       appBar: AppBar(
         title: const Text('Диагностика импорта'),
         actions: [
+          IconButton(
+            tooltip: 'Выгрузить лог',
+            onPressed: exporting || entries.isEmpty ? null : _exportLog,
+            icon: exporting
+                ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.file_download_outlined),
+          ),
           IconButton(
             tooltip: 'Очистить',
             onPressed: entries.isEmpty ? null : ImageDiagnostics.clear,
@@ -56,6 +95,8 @@ class _ImageDiagnosticsScreenState extends State<ImageDiagnosticsScreen> {
           : ListView(
               padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
               children: [
+                _exportHint(context),
+                const SizedBox(height: 12),
                 if (lastResult != null) _resultCard(context, lastResult),
                 const SizedBox(height: 12),
                 Text('Журнал', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w900)),
@@ -77,6 +118,7 @@ class _ImageDiagnosticsScreenState extends State<ImageDiagnosticsScreen> {
                             if (entry.contentType != null) _row('Content-Type', entry.contentType!),
                             if (entry.bytes != null) _row('Размер', '${entry.bytes} B'),
                             if (entry.path != null) _row('Файл', entry.path!),
+                            ...entry.data.entries.where((item) => !{'url', 'source', 'status', 'contentType', 'bytes', 'path', 'error'}.contains(item.key)).map((item) => _row(item.key, item.value.toString())),
                             if (entry.error != null) _row('Ошибка', entry.error!),
                           ],
                         ),
@@ -86,6 +128,20 @@ class _ImageDiagnosticsScreenState extends State<ImageDiagnosticsScreen> {
             ),
     );
   }
+
+  Widget _exportHint(BuildContext context) => Card(
+        margin: EdgeInsets.zero,
+        child: ListTile(
+          leading: const Icon(Icons.description_outlined),
+          title: const Text('Лог можно передать целиком'),
+          subtitle: const Text('Кнопка ↑ сверху создаёт JSON-файл, удобный для разбора в чате.'),
+          trailing: IconButton(
+            tooltip: 'Выгрузить лог',
+            onPressed: exporting || ImageDiagnostics.entries.isEmpty ? null : _exportLog,
+            icon: const Icon(Icons.ios_share_outlined),
+          ),
+        ),
+      );
 
   Widget _resultCard(BuildContext context, ImageDiagnosticEntry entry) {
     final scheme = Theme.of(context).colorScheme;
@@ -134,7 +190,7 @@ class _ImageDiagnosticsScreenState extends State<ImageDiagnosticsScreen> {
     if (event == 'SAVED') return Icons.check_circle_outline_rounded;
     if (event == 'RESPONSE') return Icons.http_rounded;
     if (event == 'CANDIDATE') return Icons.image_search_rounded;
-    if (event == 'WEBVIEW_RESULT') return Icons.web_outlined;
+    if (event.startsWith('WEBVIEW_')) return Icons.web_outlined;
     return Icons.image_outlined;
   }
 
