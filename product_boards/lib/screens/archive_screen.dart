@@ -10,10 +10,10 @@ import '../services/url_normalizer.dart';
 import '../widgets/archive_card.dart';
 import 'archive_item_page.dart';
 import 'edit_archive_item_page.dart';
+import 'smart_sort_page.dart';
 
 class ArchiveScreen extends StatefulWidget {
   const ArchiveScreen({super.key, required this.repository, required this.queue, required this.sharedData, required this.onSharedDataConsumed});
-
   final ArchiveRepository repository;
   final MetadataQueue queue;
   final Map<Object?, Object?>? sharedData;
@@ -69,10 +69,11 @@ class _ArchiveScreenState extends State<ArchiveScreen> {
     final data = widget.sharedData;
     final url = data?['url']?.toString().trim();
     if (url == null || url.isEmpty) return;
-    if (await _addUrl(url, initialTitle: data?['title']?.toString().trim()) && mounted) widget.onSharedDataConsumed();
+    final sharedImage = data?['imagePath']?.toString().trim();
+    if (await _addUrl(url, initialTitle: data?['title']?.toString().trim(), initialImageUri: sharedImage) && mounted) widget.onSharedDataConsumed();
   }
 
-  Future<bool> _addUrl(String raw, {String? initialTitle}) async {
+  Future<bool> _addUrl(String raw, {String? initialTitle, String? initialImageUri}) async {
     final uri = Uri.tryParse(raw.trim());
     if (uri == null || !{'http', 'https'}.contains(uri.scheme.toLowerCase())) {
       _snack('Нужна ссылка http/https');
@@ -82,12 +83,14 @@ class _ArchiveScreenState extends State<ArchiveScreen> {
       final duplicates = await widget.repository.findByNormalizedUrl(_normalizer.normalize(uri.toString()));
       if (duplicates.isNotEmpty && !await _confirmDuplicate(duplicates)) return false;
       final now = DateTime.now();
+      final hasInitialImage = initialImageUri?.startsWith('file:') == true;
       final item = ArchiveItem(
         id: widget.repository.newId(),
         url: uri.toString(),
         title: initialTitle?.isNotEmpty == true ? initialTitle! : '...',
         titleSource: TitleSource.automatic,
-        imageStatus: ImageStatus.loading,
+        imageUrl: hasInitialImage ? initialImageUri : null,
+        imageStatus: hasInitialImage ? ImageStatus.success : ImageStatus.loading,
         note: '',
         categoryId: _categoryId,
         metadataStatus: MetadataStatus.loading,
@@ -117,8 +120,7 @@ class _ArchiveScreenState extends State<ArchiveScreen> {
               FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Сохранить копию')),
             ],
           ),
-        ) ??
-        false;
+        ) ?? false;
   }
 
   String _categoryName(String? id) {
@@ -141,6 +143,11 @@ class _ArchiveScreenState extends State<ArchiveScreen> {
     if (!mounted) return;
     if (result != null) unawaited(widget.queue.enqueue(result));
     await _reload();
+  }
+
+  Future<void> _openSmartSort() async {
+    final result = await Navigator.push<bool>(context, MaterialPageRoute(builder: (_) => SmartSortPage(repository: widget.repository, items: _items)));
+    if (result == true && mounted) await _reload();
   }
 
   Future<void> _addDialog() async {
@@ -177,20 +184,13 @@ class _ArchiveScreenState extends State<ArchiveScreen> {
 
   Future<void> _moveSelected() async {
     if (_selected.isEmpty) return;
-    final target = await showModalBottomSheet<String>(
-      context: context,
-      showDragHandle: true,
-      builder: (_) => SafeArea(child: Column(mainAxisSize: MainAxisSize.min, children: [
-        const ListTile(title: Text('Переместить', style: TextStyle(fontWeight: FontWeight.w800))),
-        ListTile(title: const Text('Неразобранное'), onTap: () => Navigator.pop(context, '__none__')),
-        ..._categories.map((c) => ListTile(title: Text(c.name), onTap: () => Navigator.pop(context, c.id))),
-        ListTile(leading: const Icon(Icons.add), title: const Text('Создать подборку'), onTap: () => Navigator.pop(context, '__create__')),
-      ])),
-    );
-    if (target == '__create__') {
-      await _createCategory();
-      return _moveSelected();
-    }
+    final target = await showModalBottomSheet<String>(context: context, showDragHandle: true, builder: (_) => SafeArea(child: Column(mainAxisSize: MainAxisSize.min, children: [
+      const ListTile(title: Text('Переместить', style: TextStyle(fontWeight: FontWeight.w800))),
+      ListTile(title: const Text('Неразобранное'), onTap: () => Navigator.pop(context, '__none__')),
+      ..._categories.map((c) => ListTile(title: Text(c.name), onTap: () => Navigator.pop(context, c.id))),
+      ListTile(leading: const Icon(Icons.add), title: const Text('Создать подборку'), onTap: () => Navigator.pop(context, '__create__')),
+    ])));
+    if (target == '__create__') { await _createCategory(); return _moveSelected(); }
     if (target == null) return;
     await widget.repository.assignCategory(_selected, target == '__none__' ? null : target);
     _selected.clear();
@@ -221,7 +221,10 @@ class _ArchiveScreenState extends State<ArchiveScreen> {
       appBar: AppBar(
         leading: _selectionMode ? IconButton(onPressed: () => setState(() { _selectionMode = false; _selected.clear(); }), icon: const Icon(Icons.close)) : null,
         title: _selectionMode ? Text('Выбрано: ${_selected.length}') : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [const Text('Мой архив', style: TextStyle(fontWeight: FontWeight.w900)), Text(title, style: Theme.of(context).textTheme.labelMedium)]),
-        actions: [if (!_selectionMode) IconButton(tooltip: 'Выбрать', onPressed: () => setState(() => _selectionMode = true), icon: const Icon(Icons.checklist_outlined))],
+        actions: [if (!_selectionMode) ...[
+          IconButton(tooltip: 'Умная сортировка', onPressed: _items.isEmpty ? null : _openSmartSort, icon: const Icon(Icons.auto_awesome)),
+          IconButton(tooltip: 'Выбрать', onPressed: () => setState(() => _selectionMode = true), icon: const Icon(Icons.checklist_outlined)),
+        ]],
       ),
       drawer: _drawer(),
       floatingActionButton: _selectionMode ? null : FloatingActionButton.extended(onPressed: _addDialog, icon: const Icon(Icons.add), label: const Text('Добавить ссылку')),
