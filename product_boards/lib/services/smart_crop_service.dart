@@ -34,8 +34,6 @@ class SmartCropResult {
 /// back to the original screenshot whenever the evidence is weak.
 class SmartCropService {
   static const _version = 2;
-
-  // The cropper never removes more than these fractions from any edge.
   static const _maxTopCrop = 0.22;
   static const _maxBottomCrop = 0.12;
   static const _maxSideCrop = 0.04;
@@ -52,17 +50,15 @@ class SmartCropService {
     if (decoded == null || decoded.width < 64 || decoded.height < 64) return null;
 
     final bottom = _detectBottomNavigation(decoded);
-    final top = _detectTopPromo(decoded, bottom);
+    final top = _detectTopPromo(decoded);
 
     final maxTop = (decoded.height * _maxTopCrop).floor();
     final maxBottom = (decoded.height * _maxBottomCrop).floor();
     final maxSide = (decoded.width * _maxSideCrop).floor();
 
-    final topCrop = top?.crop.clamp(0, maxTop) ?? 0;
-    final bottomCrop = bottom?.crop.clamp(0, maxBottom) ?? 0;
+    final topCrop = top == null ? 0 : top.crop.clamp(0, maxTop).toInt();
+    final bottomCrop = bottom == null ? 0 : bottom.crop.clamp(0, maxBottom).toInt();
 
-    // Side trimming is intentionally tiny in v2. The marketplace screenshot
-    // is usually full-width and side cropping risks losing the product.
     final left = maxSide > 0 ? _detectSideChrome(decoded, fromLeft: true, max: maxSide) : 0;
     final right = maxSide > 0 ? _detectSideChrome(decoded, fromLeft: false, max: maxSide) : 0;
 
@@ -83,14 +79,7 @@ class SmartCropService {
       return _unchanged(source, decoded, confidence: confidence);
     }
 
-    final output = img.copyCrop(
-      decoded,
-      x: x1,
-      y: y1,
-      width: cropWidth,
-      height: cropHeight,
-    );
-
+    final output = img.copyCrop(decoded, x: x1, y: y1, width: cropWidth, height: cropHeight);
     final outputPath = p.join(
       source.parent.path,
       '${p.basenameWithoutExtension(source.path)}_smart_v$_version.jpg',
@@ -126,13 +115,10 @@ class SmartCropService {
     if (top != null) score += top.confidence * 0.55;
     if (bottom != null) score += bottom.confidence * 0.35;
     if (removedRatio >= 0.05) score += 0.10;
-    return score.clamp(0.0, 1.0);
+    return score.clamp(0.0, 1.0).toDouble();
   }
 
   _Band? _detectBottomNavigation(img.Image image) {
-    // Ozon's bottom navigation is a shallow, mostly light band containing
-    // several dark icon/text clusters spread across the width. We sample rows
-    // instead of every pixel to keep CPU usage low.
     final start = (image.height * 0.84).floor();
     final end = image.height - 2;
     _Band? best;
@@ -147,7 +133,7 @@ class SmartCropService {
       final clusterScore = _horizontalClusterScore(image, y, image.height - 1);
       if (clusterScore < 0.45) continue;
 
-      final confidence = (0.45 * stats.lightRatio + 0.35 * clusterScore + 0.20 * (1 - stats.darkRatio)).clamp(0.0, 1.0);
+      final confidence = (0.45 * stats.lightRatio + 0.35 * clusterScore + 0.20 * (1 - stats.darkRatio)).clamp(0.0, 1.0).toDouble();
       if (best == null || confidence > best.confidence) {
         best = _Band(crop: bandHeight, confidence: confidence);
       }
@@ -155,10 +141,7 @@ class SmartCropService {
     return best;
   }
 
-  _Band? _detectTopPromo(img.Image image, _Band? bottom) {
-    // Search only the upper part. We look for a wide, bounded visual block
-    // followed by a transition into normal page content. This catches the
-    // common "open in Ozon / promo" banner without assuming its exact color.
+  _Band? _detectTopPromo(img.Image image) {
     final maxY = (image.height * _maxTopCrop).floor();
     final bottomLimit = math.min(maxY, (image.height * 0.34).floor());
     final step = math.max(2, image.height ~/ 320);
@@ -168,21 +151,15 @@ class SmartCropService {
       final above = _rowStats(image, y);
       final belowY = math.min(image.height - 1, y + math.max(8, image.height ~/ 45));
       final below = _rowStats(image, belowY);
-
-      // A promo band tends to have noticeably different luminance/variance
-      // from the content immediately below it. Avoid plain headers by requiring
-      // enough horizontal visual structure in the band.
       final varianceDelta = (above.lumaVariance - below.lumaVariance).abs();
       final colorDelta = (above.colorfulness - below.colorfulness).abs();
       final structure = _horizontalClusterScore(image, math.max(0, y - 2), belowY);
-      final score = (varianceDelta * 2.4 + colorDelta * 1.8 + structure * 0.45).clamp(0.0, 1.0);
+      final score = (varianceDelta * 2.4 + colorDelta * 1.8 + structure * 0.45).clamp(0.0, 1.0).toDouble();
       if (score < 0.50) continue;
 
-      // Do not crop through the probable product region. A top crop should
-      // remain modest unless the evidence is particularly strong.
       final crop = y;
       if (crop < image.height * 0.055 || crop > maxY) continue;
-      final confidence = math.min(0.96, score * (crop / image.height > 0.08 ? 1.0 : 0.82));
+      final confidence = math.min(0.96, score * (crop / image.height > 0.08 ? 1.0 : 0.82)).toDouble();
       if (best == null || confidence > best.confidence) {
         best = _Band(crop: crop, confidence: confidence);
       }
@@ -192,8 +169,6 @@ class SmartCropService {
   }
 
   int _detectSideChrome(img.Image image, {required bool fromLeft, required int max}) {
-    // Only remove a side strip when it is consistently near-uniform. This is
-    // mostly useful for browser/WebView gutters, not marketplace content.
     for (var offset = 0; offset < max; offset++) {
       final x = fromLeft ? offset : image.width - 1 - offset;
       final stats = _columnStats(image, x);
@@ -269,7 +244,7 @@ class SmartCropService {
       }
     }
     if (samples == 0) return 0;
-    return (transitions / samples * 4.0).clamp(0.0, 1.0);
+    return (transitions / samples * 4.0).clamp(0.0, 1.0).toDouble();
   }
 }
 
