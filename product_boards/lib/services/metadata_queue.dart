@@ -37,44 +37,43 @@ class MetadataQueue {
   }
 
   Future<void> _process(ArchiveItem initial) async {
-    ArchiveItem item = initial;
-    Object? lastError;
+    var lastError = false;
+
     for (var attempt = 0; attempt < _delays.length; attempt++) {
       if (attempt > 0) await Future<void>.delayed(_delays[attempt]);
       try {
-        final result = await service.fetch(Uri.parse(item.url));
-        final titleOk = result.title != null && result.title!.trim().isNotEmpty;
-        final imageOk = result.imageUrl != null && result.imageUrl!.trim().isNotEmpty;
-        final next = item.copyWith(
-          title: item.titleSource == TitleSource.manual ? item.title : (titleOk ? result.title! : 'Без названия'),
-          imageUrl: imageOk ? result.imageUrl : null,
-          imageStatus: imageOk ? ImageStatus.success : ImageStatus.failed,
-          metadataStatus: titleOk && imageOk ? MetadataStatus.success : (titleOk || imageOk ? MetadataStatus.partial : MetadataStatus.failed),
+        final result = await service.fetch(Uri.parse(initial.url));
+        final titleOk = result.title?.trim().isNotEmpty == true;
+        final imageOk = result.imageUrl?.trim().isNotEmpty == true;
+        final next = initial.copyWith(
+          title: initial.titleSource == TitleSource.manual ? initial.title : (titleOk ? result.title! : initial.title),
+          imageUrl: imageOk ? result.imageUrl : initial.imageUrl,
+          imageStatus: imageOk || initial.imageUrl != null ? ImageStatus.success : ImageStatus.failed,
+          metadataStatus: titleOk && (imageOk || initial.imageUrl != null) ? MetadataStatus.success : (titleOk || imageOk ? MetadataStatus.partial : MetadataStatus.failed),
           updatedAt: DateTime.now(),
         );
         await repository.upsertItem(next);
         return;
-      } on PermanentMetadataException catch (error) {
-        lastError = error;
+      } on PermanentMetadataException {
+        lastError = true;
         break;
-      } on TemporaryMetadataException catch (error) {
-        lastError = error;
-      } on TimeoutException catch (error) {
-        lastError = error;
-      } catch (error) {
-        lastError = error;
+      } on TemporaryMetadataException {
+        lastError = true;
+      } on TimeoutException {
+        lastError = true;
+      } catch (_) {
+        lastError = true;
       }
     }
 
-    final failed = item.copyWith(
-      title: item.titleSource == TitleSource.manual ? item.title : 'Без названия',
-      imageUrl: null,
-      imageStatus: ImageStatus.failed,
-      metadataStatus: MetadataStatus.failed,
-      updatedAt: DateTime.now(),
-    );
-    await repository.upsertItem(failed);
-    // ignore: avoid_print
-    print('Metadata failed for ${item.url}: $lastError');
+    if (lastError) {
+      final failed = initial.copyWith(
+        title: initial.titleSource == TitleSource.manual ? initial.title : initial.title.isEmpty ? 'Без названия' : initial.title,
+        imageStatus: initial.imageUrl == null ? ImageStatus.failed : ImageStatus.success,
+        metadataStatus: MetadataStatus.failed,
+        updatedAt: DateTime.now(),
+      );
+      await repository.upsertItem(failed);
+    }
   }
 }
