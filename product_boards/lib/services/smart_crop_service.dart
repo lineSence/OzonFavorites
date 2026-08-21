@@ -26,16 +26,19 @@ class SmartCropResult {
   final int bottom;
 }
 
-/// Conservative, CPU-light v1 cropper.
+/// CPU-light screenshot cleaner for marketplace pages.
 ///
-/// It only removes large near-white outer margins. It deliberately does not
-/// try to identify the product itself yet, so text, price and the product
-/// image are preserved. If detection is uncertain, the original image is
-/// returned unchanged.
+/// v2 no longer relies on white margins. It looks for UI chrome bands that
+/// commonly surround a product page: a bottom navigation bar and a top promo
+/// / application banner. Detection is deliberately conservative and falls
+/// back to the original screenshot whenever the evidence is weak.
 class SmartCropService {
-  static const _whiteThreshold = 247;
-  static const _requiredContentRatio = 0.015;
-  static const _maxCropRatio = 0.20;
+  static const _version = 2;
+
+  // The cropper never removes more than these fractions from any edge.
+  static const _maxTopCrop = 0.22;
+  static const _maxBottomCrop = 0.12;
+  static const _maxSideCrop = 0.04;
 
   Future<SmartCropResult?> process(String fileUri) async {
     final uri = Uri.tryParse(fileUri);
@@ -46,127 +49,240 @@ class SmartCropService {
 
     final bytes = await source.readAsBytes();
     final decoded = img.decodeImage(bytes);
-    if (decoded == null || decoded.width < 32 || decoded.height < 32) return null;
+    if (decoded == null || decoded.width < 64 || decoded.height < 64) return null;
 
-    final bounds = _detectBounds(decoded);
-    if (bounds == null) return null;
+    final bottom = _detectBottomNavigation(decoded);
+    final top = _detectTopPromo(decoded, bottom);
 
-    final cropWidth = bounds[2] - bounds[0];
-    final cropHeight = bounds[3] - bounds[1];
-    final originalArea = decoded.width * decoded.height;
-    final cropArea = cropWidth * cropHeight;
-    final removedRatio = 1 - cropArea / originalArea;
+    final maxTop = (decoded.height * _maxTopCrop).floor();
+    final maxBottom = (decoded.height * _maxBottomCrop).floor();
+    final maxSide = (decoded.width * _maxSideCrop).floor();
 
-    // Never make an aggressive decision in v1.
-    if (removedRatio < 0.02 || removedRatio > 0.60) {
-      return SmartCropResult(
-        originalPath: source.path,
-        outputPath: source.path,
-        changed: false,
-        confidence: 0.0,
-        left: 0,
-        top: 0,
-        right: decoded.width,
-        bottom: decoded.height,
-      );
+    final topCrop = top?.crop.clamp(0, maxTop) ?? 0;
+    final bottomCrop = bottom?.crop.clamp(0, maxBottom) ?? 0;
+
+    // Side trimming is intentionally tiny in v2. The marketplace screenshot
+    // is usually full-width and side cropping risks losing the product.
+    final left = maxSide > 0 ? _detectSideChrome(decoded, fromLeft: true, max: maxSide) : 0;
+    final right = maxSide > 0 ? _detectSideChrome(decoded, fromLeft: false, max: maxSide) : 0;
+
+    final x1 = left;
+    final y1 = topCrop;
+    final x2 = decoded.width - right;
+    final y2 = decoded.height - bottomCrop;
+
+    final cropWidth = x2 - x1;
+    final cropHeight = y2 - y1;
+    if (cropWidth < decoded.width * 0.90 || cropHeight < decoded.height * 0.65) {
+      return _unchanged(source, decoded);
+    }
+
+    final removedRatio = 1 - (cropWidth * cropHeight) / (decoded.width * decoded.height);
+    final confidence = _confidence(top, bottom, removedRatio);
+    if (removedRatio < 0.025 || confidence < 0.62) {
+      return _unchanged(source, decoded, confidence: confidence);
     }
 
     final output = img.copyCrop(
       decoded,
-      x: bounds[0],
-      y: bounds[1],
+      x: x1,
+      y: y1,
       width: cropWidth,
       height: cropHeight,
     );
 
     final outputPath = p.join(
       source.parent.path,
-      '${p.basenameWithoutExtension(source.path)}_smart.jpg',
+      '${p.basenameWithoutExtension(source.path)}_smart_v$_version.jpg',
     );
     final outputFile = File(outputPath);
-    await outputFile.writeAsBytes(img.encodeJpg(output, quality: 90), flush: true);
+    await outputFile.writeAsBytes(img.encodeJpg(output, quality: 92), flush: true);
 
-    final confidence = math.min(1.0, removedRatio / 0.20);
     return SmartCropResult(
       originalPath: source.path,
       outputPath: outputFile.path,
       changed: true,
       confidence: confidence,
-      left: bounds[0],
-      top: bounds[1],
-      right: bounds[2],
-      bottom: bounds[3],
+      left: x1,
+      top: y1,
+      right: x2,
+      bottom: y2,
     );
   }
 
-  List<int>? _detectBounds(img.Image image) {
-    final left = _scanColumn(image, fromLeft: true);
-    final right = _scanColumn(image, fromLeft: false);
-    final top = _scanRow(image, fromTop: true);
-    final bottom = _scanRow(image, fromTop: false);
+  SmartCropResult _unchanged(File source, img.Image image, {double confidence = 0}) => SmartCropResult(
+        originalPath: source.path,
+        outputPath: source.path,
+        changed: false,
+        confidence: confidence,
+        left: 0,
+        top: 0,
+        right: image.width,
+        bottom: image.height,
+      );
 
-    final maxXTrim = (image.width * _maxCropRatio).floor();
-    final maxYTrim = (image.height * _maxCropRatio).floor();
-    final safeLeft = math.min(left, maxXTrim);
-    final safeRight = math.min(right, maxXTrim);
-    final safeTop = math.min(top, maxYTrim);
-    final safeBottom = math.min(bottom, maxYTrim);
-
-    final x1 = safeLeft;
-    final y1 = safeTop;
-    final x2 = image.width - safeRight;
-    final y2 = image.height - safeBottom;
-    if (x2 - x1 < image.width * 0.65 || y2 - y1 < image.height * 0.65) return null;
-    return [x1, y1, x2, y2];
+  double _confidence(_Band? top, _Band? bottom, double removedRatio) {
+    var score = 0.0;
+    if (top != null) score += top.confidence * 0.55;
+    if (bottom != null) score += bottom.confidence * 0.35;
+    if (removedRatio >= 0.05) score += 0.10;
+    return score.clamp(0.0, 1.0);
   }
 
-  int _scanColumn(img.Image image, {required bool fromLeft}) {
-    final max = (image.width * _maxCropRatio).floor();
+  _Band? _detectBottomNavigation(img.Image image) {
+    // Ozon's bottom navigation is a shallow, mostly light band containing
+    // several dark icon/text clusters spread across the width. We sample rows
+    // instead of every pixel to keep CPU usage low.
+    final start = (image.height * 0.84).floor();
+    final end = image.height - 2;
+    _Band? best;
+
+    for (var y = start; y < end; y += math.max(2, image.height ~/ 320)) {
+      final stats = _rowStats(image, y);
+      if (stats.lightRatio < 0.72 || stats.darkRatio < 0.015 || stats.darkRatio > 0.28) continue;
+
+      final bandHeight = image.height - y;
+      if (bandHeight < image.height * 0.035 || bandHeight > image.height * 0.12) continue;
+
+      final clusterScore = _horizontalClusterScore(image, y, image.height - 1);
+      if (clusterScore < 0.45) continue;
+
+      final confidence = (0.45 * stats.lightRatio + 0.35 * clusterScore + 0.20 * (1 - stats.darkRatio)).clamp(0.0, 1.0);
+      if (best == null || confidence > best.confidence) {
+        best = _Band(crop: bandHeight, confidence: confidence);
+      }
+    }
+    return best;
+  }
+
+  _Band? _detectTopPromo(img.Image image, _Band? bottom) {
+    // Search only the upper part. We look for a wide, bounded visual block
+    // followed by a transition into normal page content. This catches the
+    // common "open in Ozon / promo" banner without assuming its exact color.
+    final maxY = (image.height * _maxTopCrop).floor();
+    final bottomLimit = math.min(maxY, (image.height * 0.34).floor());
+    final step = math.max(2, image.height ~/ 320);
+    _Band? best;
+
+    for (var y = (image.height * 0.035).floor(); y < bottomLimit; y += step) {
+      final above = _rowStats(image, y);
+      final belowY = math.min(image.height - 1, y + math.max(8, image.height ~/ 45));
+      final below = _rowStats(image, belowY);
+
+      // A promo band tends to have noticeably different luminance/variance
+      // from the content immediately below it. Avoid plain headers by requiring
+      // enough horizontal visual structure in the band.
+      final varianceDelta = (above.lumaVariance - below.lumaVariance).abs();
+      final colorDelta = (above.colorfulness - below.colorfulness).abs();
+      final structure = _horizontalClusterScore(image, math.max(0, y - 2), belowY);
+      final score = (varianceDelta * 2.4 + colorDelta * 1.8 + structure * 0.45).clamp(0.0, 1.0);
+      if (score < 0.50) continue;
+
+      // Do not crop through the probable product region. A top crop should
+      // remain modest unless the evidence is particularly strong.
+      final crop = y;
+      if (crop < image.height * 0.055 || crop > maxY) continue;
+      final confidence = math.min(0.96, score * (crop / image.height > 0.08 ? 1.0 : 0.82));
+      if (best == null || confidence > best.confidence) {
+        best = _Band(crop: crop, confidence: confidence);
+      }
+    }
+
+    return best;
+  }
+
+  int _detectSideChrome(img.Image image, {required bool fromLeft, required int max}) {
+    // Only remove a side strip when it is consistently near-uniform. This is
+    // mostly useful for browser/WebView gutters, not marketplace content.
     for (var offset = 0; offset < max; offset++) {
       final x = fromLeft ? offset : image.width - 1 - offset;
-      if (!_isMostlyWhiteColumn(image, x)) return offset;
+      final stats = _columnStats(image, x);
+      if (stats.lightRatio < 0.94) return offset;
     }
-    return max;
+    return 0;
   }
 
-  int _scanRow(img.Image image, {required bool fromTop}) {
-    final max = (image.height * _maxCropRatio).floor();
-    for (var offset = 0; offset < max; offset++) {
-      final y = fromTop ? offset : image.height - 1 - offset;
-      if (!_isMostlyWhiteRow(image, y)) return offset;
-    }
-    return max;
-  }
-
-  bool _isMostlyWhiteColumn(img.Image image, int x) {
+  _RowStats _rowStats(img.Image image, int y) {
+    var light = 0;
     var dark = 0;
-    final step = math.max(1, image.height ~/ 80);
+    var lumaSum = 0.0;
+    var lumaSq = 0.0;
+    var colorSum = 0.0;
+    final step = math.max(1, image.width ~/ 120);
+    var samples = 0;
+
+    for (var x = 0; x < image.width; x += step) {
+      final px = image.getPixel(x, y);
+      final r = px.r.toDouble();
+      final g = px.g.toDouble();
+      final b = px.b.toDouble();
+      final luma = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255.0;
+      if (luma > 0.92) light++;
+      if (luma < 0.32) dark++;
+      final maxChannel = math.max(r, math.max(g, b));
+      final minChannel = math.min(r, math.min(g, b));
+      colorSum += (maxChannel - minChannel) / 255.0;
+      lumaSum += luma;
+      lumaSq += luma * luma;
+      samples++;
+    }
+
+    final mean = samples == 0 ? 0.0 : lumaSum / samples;
+    final variance = samples == 0 ? 0.0 : math.max(0.0, lumaSq / samples - mean * mean);
+    return _RowStats(
+      lightRatio: samples == 0 ? 0 : light / samples,
+      darkRatio: samples == 0 ? 0 : dark / samples,
+      lumaVariance: variance,
+      colorfulness: samples == 0 ? 0 : colorSum / samples,
+    );
+  }
+
+  _RowStats _columnStats(img.Image image, int x) {
+    var light = 0;
+    final step = math.max(1, image.height ~/ 120);
     var samples = 0;
     for (var y = 0; y < image.height; y += step) {
-      final pixel = image.getPixel(x, y);
-      if (pixel.r.toInt() < _whiteThreshold ||
-          pixel.g.toInt() < _whiteThreshold ||
-          pixel.b.toInt() < _whiteThreshold) {
-        dark++;
-      }
+      final px = image.getPixel(x, y);
+      final luma = (0.2126 * px.r + 0.7152 * px.g + 0.0722 * px.b) / 255.0;
+      if (luma > 0.92) light++;
       samples++;
     }
-    return dark / samples < _requiredContentRatio;
+    return _RowStats(lightRatio: samples == 0 ? 0 : light / samples, darkRatio: 0, lumaVariance: 0, colorfulness: 0);
   }
 
-  bool _isMostlyWhiteRow(img.Image image, int y) {
-    var dark = 0;
-    final step = math.max(1, image.width ~/ 80);
+  double _horizontalClusterScore(img.Image image, int y1, int y2) {
+    final width = image.width;
+    final stepX = math.max(1, width ~/ 100);
+    final stepY = math.max(1, (y2 - y1) ~/ 20);
+    var transitions = 0;
     var samples = 0;
-    for (var x = 0; x < image.width; x += step) {
-      final pixel = image.getPixel(x, y);
-      if (pixel.r.toInt() < _whiteThreshold ||
-          pixel.g.toInt() < _whiteThreshold ||
-          pixel.b.toInt() < _whiteThreshold) {
-        dark++;
+    var previousDark = false;
+
+    for (var y = y1; y <= y2; y += stepY) {
+      for (var x = 0; x < width; x += stepX) {
+        final px = image.getPixel(x, y);
+        final luma = (0.2126 * px.r + 0.7152 * px.g + 0.0722 * px.b) / 255.0;
+        final dark = luma < 0.42;
+        if (dark != previousDark) transitions++;
+        previousDark = dark;
+        samples++;
       }
-      samples++;
     }
-    return dark / samples < _requiredContentRatio;
+    if (samples == 0) return 0;
+    return (transitions / samples * 4.0).clamp(0.0, 1.0);
   }
+}
+
+class _Band {
+  const _Band({required this.crop, required this.confidence});
+  final int crop;
+  final double confidence;
+}
+
+class _RowStats {
+  const _RowStats({required this.lightRatio, required this.darkRatio, required this.lumaVariance, required this.colorfulness});
+  final double lightRatio;
+  final double darkRatio;
+  final double lumaVariance;
+  final double colorfulness;
 }
