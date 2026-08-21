@@ -148,10 +148,13 @@ class MainActivity : FlutterActivity() {
         webView.settings.cacheMode = WebSettings.LOAD_DEFAULT
         webView.settings.userAgentString = "Mozilla/5.0 (Linux; Android 14; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
         webView.setBackgroundColor(android.graphics.Color.WHITE)
-        // The WebView is hidden from the user, but must remain renderable when
-        // we call View.draw(). A transparent/alpha=0 WebView can produce a
-        // completely blank bitmap on some Android GPU implementations.
+        // Keep the WebView fully renderable for View.draw(), but move it outside
+        // the visible Flutter content so the live page can never flash on screen.
+        // We intentionally do not use alpha=0 because that can produce blank
+        // screenshots on some Android GPU implementations.
         webView.alpha = 1f
+        webView.translationX = -10000f
+        webView.translationY = -10000f
         webView.setLayerType(View.LAYER_TYPE_SOFTWARE, null)
         webView.layoutParams = FrameLayout.LayoutParams(900, 1600)
         webView.isVerticalScrollBarEnabled = false
