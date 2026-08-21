@@ -1,12 +1,15 @@
 import 'package:flutter/material.dart';
 
 import '../models/archive_item.dart';
-import '../services/smart_sort_service.dart';
+import '../models/category.dart';
 import '../repositories/archive_repository.dart';
+import '../services/smart_sort_service.dart';
 
 class SmartSortPage extends StatefulWidget {
-  const SmartSortPage({super.key, required this.repository});
+  const SmartSortPage({super.key, required this.repository, required this.items});
+
   final ArchiveRepository repository;
+  final List<ArchiveItem> items;
 
   @override
   State<SmartSortPage> createState() => _SmartSortPageState();
@@ -14,9 +17,8 @@ class SmartSortPage extends StatefulWidget {
 
 class _SmartSortPageState extends State<SmartSortPage> {
   final SmartSortService _service = SmartSortService();
-  List<ArchiveItem> _items = const [];
   List<SmartSortResult> _results = const [];
-  List<String> _categories = const [];
+  List<Category> _categories = const [];
   bool _loading = true;
   bool _applying = false;
 
@@ -28,18 +30,14 @@ class _SmartSortPageState extends State<SmartSortPage> {
 
   Future<void> _load() async {
     try {
-      final items = await widget.repository.getAllItems();
       final categories = await widget.repository.getCategories();
+      final results = _service.classifyAll(widget.items);
       if (!mounted) return;
       setState(() {
-        _items = items;
         _categories = categories;
+        _results = results;
         _loading = false;
       });
-      if (items.isNotEmpty) {
-        final results = await _service.classifyAll(items, categories: categories);
-        if (mounted) setState(() => _results = results);
-      }
     } catch (_) {
       if (mounted) setState(() => _loading = false);
     }
@@ -60,14 +58,19 @@ class _SmartSortPageState extends State<SmartSortPage> {
     setState(() => _applying = true);
     try {
       for (final result in confident) {
-        await widget.repository.updateCategory(result.itemId, result.category);
+        final category = _categories.cast<Category?>().firstWhere(
+          (candidate) => candidate?.name == result.category,
+          orElse: () => null,
+        );
+        if (category != null) {
+          await widget.repository.assignCategory([result.item.id], category.id);
+        }
       }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Распределено: ${confident.length}')),
         );
       }
-      await _load();
     } finally {
       if (mounted) setState(() => _applying = false);
     }
@@ -103,13 +106,9 @@ class _SmartSortPageState extends State<SmartSortPage> {
                     title: Text(entry.key),
                     subtitle: Text('${entry.value.length} элементов'),
                     children: entry.value.map((result) {
-                      final item = _items.cast<ArchiveItem?>().firstWhere(
-                        (candidate) => candidate?.id == result.itemId,
-                        orElse: () => null,
-                      );
                       return ListTile(
-                        title: Text(item?.title ?? result.itemId),
-                        subtitle: Text('${result.confidence}% • ${result.reason}'),
+                        title: Text(result.item.title),
+                        subtitle: Text('${(result.score * 100).round()}% • ${result.matchedKeywords.join(', ')}'),
                       );
                     }).toList(),
                   ),
