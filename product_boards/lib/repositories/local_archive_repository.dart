@@ -99,7 +99,9 @@ class LocalArchiveRepository implements ArchiveRepository {
     final rows = await db.query('categories');
     for (final row in rows) {
       final category = Category.fromJson(jsonDecode(row['data']! as String) as Map<String, dynamic>);
-      if (category.name.trim().toLowerCase() == key) return category;
+      if (category.name.trim().toLowerCase() == key) {
+        return category;
+      }
     }
     return null;
   }
@@ -138,7 +140,9 @@ class LocalArchiveRepository implements ArchiveRepository {
   @override
   Future<void> deleteItems(Iterable<String> ids) async {
     await _database.transaction((txn) async {
-      for (final id in ids) await txn.delete('archive_items', where: 'id = ?', whereArgs: [id]);
+      for (final id in ids) {
+        await txn.delete('archive_items', where: 'id = ?', whereArgs: [id]);
+      }
     });
   }
 
@@ -194,6 +198,8 @@ class LocalArchiveRepository implements ArchiveRepository {
   Future<void> close() async {
     final db = _db;
     _db = null;
-    if (db != null) await db.close();
+    if (db != null) {
+      await db.close();
+    }
   }
 }
