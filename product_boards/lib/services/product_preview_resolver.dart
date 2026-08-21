@@ -5,19 +5,23 @@ import 'image_cache_service.dart';
 import 'image_diagnostics.dart';
 import 'marketplace_search_resolver.dart';
 import 'product_importer.dart';
+import 'smart_crop_service.dart';
 
 class ProductPreviewResolver {
   ProductPreviewResolver({
     ProductImporter? importer,
     ImageCacheService? imageCache,
     MarketplaceSearchResolver? searchResolver,
+    SmartCropService? smartCrop,
   })  : _importer = importer ?? ProductImporter(),
         _imageCache = imageCache ?? ImageCacheService(),
-        _searchResolver = searchResolver ?? MarketplaceSearchResolver();
+        _searchResolver = searchResolver ?? MarketplaceSearchResolver(),
+        _smartCrop = smartCrop ?? SmartCropService();
 
   final ProductImporter _importer;
   final ImageCacheService _imageCache;
   final MarketplaceSearchResolver _searchResolver;
+  final SmartCropService _smartCrop;
 
   Future<ProductPreview> resolve(
     Uri uri, {
@@ -48,9 +52,6 @@ class ProductPreviewResolver {
     Uri? resolvedProductUrl =
         data.resolvedUrl != null ? Uri.tryParse(data.resolvedUrl!) : null;
 
-    // For Ozon short links, search is only a URL/data fallback. The image is
-    // still always produced by opening the candidate in WebView and taking a
-    // screenshot; no remote image URL is used.
     if (isOzonShortLink &&
         data.screenshotUri == null &&
         sharedTitle?.trim().isNotEmpty == true) {
@@ -125,6 +126,29 @@ class ProductPreviewResolver {
         'localImage': localImage,
         'success': localImage != null,
       });
+
+      if (localImage != null) {
+        try {
+          final crop = await _smartCrop.process(localImage);
+          if (crop != null) {
+            ImageDiagnostics.log('SMART_CROP_RESULT', {
+              'url': uri.toString(),
+              'changed': crop.changed,
+              'confidence': crop.confidence,
+              'left': crop.left,
+              'top': crop.top,
+              'right': crop.right,
+              'bottom': crop.bottom,
+              'originalPath': crop.originalPath,
+              'outputPath': crop.outputPath,
+            });
+            if (crop.changed) localImage = File(crop.outputPath).uri.toString();
+          }
+        } catch (error, stackTrace) {
+          // Cropping is optional. Keep the original screenshot if processing fails.
+          ImageDiagnostics.failure('SMART_CROP_FAILED', error, url: uri.toString(), stackTrace: stackTrace);
+        }
+      }
     } else {
       ImageDiagnostics.log('SCREENSHOT_MISSING', {
         'url': uri.toString(),
@@ -139,7 +163,7 @@ class ProductPreviewResolver {
       'price': data.price,
       'image': null,
       'localImage': localImage,
-      'imageSource': localImage != null ? 'webview_screenshot' : null,
+      'imageSource': localImage != null ? 'webview_screenshot_smart_crop_v1' : null,
       'resolvedProductUrl': resolvedProductUrl?.toString(),
       'isOzonShortLink': isOzonShortLink,
     });
@@ -190,8 +214,6 @@ class ProductPreviewResolver {
   static String _fallbackTitle(Uri uri) =>
       uri.pathSegments.isNotEmpty ? uri.pathSegments.last : uri.host;
 
-  // Kept for callers that may inspect a local share URI; screenshot capture is
-  // intentionally the canonical cover source for this importer.
   static Map<String, Object?> describeSharedImage(String value) {
     try {
       final uri = Uri.tryParse(value);
