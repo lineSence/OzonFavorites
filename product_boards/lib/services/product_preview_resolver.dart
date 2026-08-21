@@ -49,16 +49,10 @@ class ProductPreviewResolver {
       ImageDiagnostics.failure('RESOLVER_IMPORT', error, url: uri.toString(), stackTrace: stackTrace);
     }
 
-    Uri? resolvedProductUrl =
-        data.resolvedUrl != null ? Uri.tryParse(data.resolvedUrl!) : null;
+    Uri? resolvedProductUrl = data.resolvedUrl != null ? Uri.tryParse(data.resolvedUrl!) : null;
 
-    if (isOzonShortLink &&
-        data.screenshotUri == null &&
-        sharedTitle?.trim().isNotEmpty == true) {
-      ImageDiagnostics.log('OZON_SEARCH_FALLBACK_START', {
-        'url': uri.toString(),
-        'title': sharedTitle!.trim(),
-      });
+    if (isOzonShortLink && data.screenshotUri == null && sharedTitle?.trim().isNotEmpty == true) {
+      ImageDiagnostics.log('OZON_SEARCH_FALLBACK_START', {'url': uri.toString(), 'title': sharedTitle!.trim()});
       try {
         final candidate = await _searchResolver.findOzonProduct(sharedTitle.trim());
         if (candidate != null) {
@@ -70,7 +64,6 @@ class ProductPreviewResolver {
             'score': candidate.score,
             'engine': candidate.engine,
           });
-
           try {
             final candidateData = await _importer.fetch(candidate.url);
             data = data.merge(candidateData);
@@ -83,18 +76,10 @@ class ProductPreviewResolver {
               'success': candidateData.screenshotUri != null,
             });
           } catch (error, stackTrace) {
-            ImageDiagnostics.failure(
-              'OZON_SCREENSHOT_RESOLVE',
-              error,
-              url: candidate.url.toString(),
-              stackTrace: stackTrace,
-            );
+            ImageDiagnostics.failure('OZON_SCREENSHOT_RESOLVE', error, url: candidate.url.toString(), stackTrace: stackTrace);
           }
         } else {
-          ImageDiagnostics.log('OZON_SEARCH_NOT_FOUND', {
-            'url': uri.toString(),
-            'title': sharedTitle.trim(),
-          });
+          ImageDiagnostics.log('OZON_SEARCH_NOT_FOUND', {'url': uri.toString(), 'title': sharedTitle.trim()});
         }
       } catch (error, stackTrace) {
         ImageDiagnostics.failure('OZON_SEARCH_FALLBACK', error, url: uri.toString(), stackTrace: stackTrace);
@@ -132,6 +117,7 @@ class ProductPreviewResolver {
           final crop = await _smartCrop.process(localImage);
           if (crop != null) {
             ImageDiagnostics.log('SMART_CROP_RESULT', {
+              'version': 2,
               'url': uri.toString(),
               'changed': crop.changed,
               'confidence': crop.confidence,
@@ -141,11 +127,11 @@ class ProductPreviewResolver {
               'bottom': crop.bottom,
               'originalPath': crop.originalPath,
               'outputPath': crop.outputPath,
+              'sourceDimensions': '${crop.right - crop.left}x${crop.bottom - crop.top}',
             });
             if (crop.changed) localImage = File(crop.outputPath).uri.toString();
           }
         } catch (error, stackTrace) {
-          // Cropping is optional. Keep the original screenshot if processing fails.
           ImageDiagnostics.failure('SMART_CROP_FAILED', error, url: uri.toString(), stackTrace: stackTrace);
         }
       }
@@ -163,7 +149,7 @@ class ProductPreviewResolver {
       'price': data.price,
       'image': null,
       'localImage': localImage,
-      'imageSource': localImage != null ? 'webview_screenshot_smart_crop_v1' : null,
+      'imageSource': localImage != null ? 'webview_screenshot_smart_crop_v2' : null,
       'resolvedProductUrl': resolvedProductUrl?.toString(),
       'isOzonShortLink': isOzonShortLink,
     });
@@ -180,10 +166,7 @@ class ProductPreviewResolver {
     );
   }
 
-  static bool _isOzonShortLink(Uri uri) =>
-      uri.host.toLowerCase().contains('ozon') &&
-      uri.pathSegments.isNotEmpty &&
-      uri.pathSegments.first.toLowerCase() == 't';
+  static bool _isOzonShortLink(Uri uri) => uri.host.toLowerCase().contains('ozon') && uri.pathSegments.isNotEmpty && uri.pathSegments.first.toLowerCase() == 't';
 
   static String _chooseTitle(String? imported, String? sharedTitle, Uri uri) {
     final candidates = <String>[
@@ -211,23 +194,15 @@ class ProductPreviewResolver {
     return uri.host;
   }
 
-  static String _fallbackTitle(Uri uri) =>
-      uri.pathSegments.isNotEmpty ? uri.pathSegments.last : uri.host;
+  static String _fallbackTitle(Uri uri) => uri.pathSegments.isNotEmpty ? uri.pathSegments.last : uri.host;
 
   static Map<String, Object?> describeSharedImage(String value) {
     try {
       final uri = Uri.tryParse(value);
-      if (uri?.scheme != 'file') {
-        return {'scheme': uri?.scheme, 'exists': false};
-      }
+      if (uri?.scheme != 'file') return {'scheme': uri?.scheme, 'exists': false};
       final file = File(uri!.toFilePath());
       final exists = file.existsSync();
-      return {
-        'scheme': 'file',
-        'path': file.path,
-        'exists': exists,
-        'bytes': exists ? file.lengthSync() : null,
-      };
+      return {'scheme': 'file', 'path': file.path, 'exists': exists, 'bytes': exists ? file.lengthSync() : null};
     } catch (error) {
       return {'exists': false, 'error': error.toString()};
     }
