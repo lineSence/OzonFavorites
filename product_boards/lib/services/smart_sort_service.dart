@@ -21,8 +21,6 @@ class SmartSortAlternative {
   final double score;
 }
 
-/// Deterministic offline classifier. It is deliberately isolated from the UI
-/// and domain model so a future embedding/vision classifier can replace it.
 class SmartSortService {
   static const Map<String, List<String>> _keywords = {
     'Одежда': ['футболк', 'майк', 'худи', 'толстовк', 'свитшот', 'куртк', 'пальто', 'плащ', 'брюк', 'штаны', 'джинс', 'рубаш', 'плать', 'юбк', 'носк', 'бель', 'одежд', 'кофт', 'свитер', 'жакет', 'жилет', 'шорт', 'топ', 'леггинс', 'спортивк', 'ветровк', 'парка', 'кардиган', 'пиджак', 'комбинезон', 'костюм', 'флис', 'лонгслив', 'поло', 'боди'],
@@ -59,9 +57,13 @@ class SmartSortService {
     'Спорт': ['спортивная куртка', 'спортивная одежда'],
   };
 
+  List<SmartSortResult> classifyAll(Iterable<ArchiveItem> items) => items.map(classify).toList(growable: false);
+
   SmartSortResult classify(ArchiveItem item) {
     final features = ProductFeatures.fromItem(item);
-    final text = _buildSearchText(features);
+    final parsedUri = Uri.tryParse(features.url);
+    final decodedPath = parsedUri == null ? '' : Uri.decodeComponent(parsedUri.path);
+    final text = _normalize('${features.text} $decodedPath');
     final scores = <String, double>{};
     final matches = <String, List<String>>{};
 
@@ -95,17 +97,10 @@ class SmartSortService {
     final ranked = scores.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
     final top = ranked.first;
     final second = ranked.length > 1 ? ranked[1] : null;
-    final normalizedScore = (top.value / (top.value + (second?.value ?? 0) + .5)).clamp(0.0, .98).toDouble();
-    final alternatives = ranked.skip(1).take(2).map((e) => SmartSortAlternative(category: e.key, score: (e.value / (top.value + .5)).clamp(0.0, .99).toDouble())).toList();
+    final normalizedScore = second == null ? (0.55 + top.value / (top.value + 8.0) * .43).clamp(0.0, .98).toDouble() : (top.value / (top.value + second.value + 1.5)).clamp(0.0, .98).toDouble();
+    final alternatives = ranked.skip(1).take(2).map((e) => SmartSortAlternative(category: e.key, score: (e.value / (top.value + 1.5)).clamp(0.0, .99).toDouble())).toList();
 
     return SmartSortResult(item: item, category: top.key, score: normalizedScore, matchedKeywords: matches[top.key] ?? const [], alternatives: alternatives, hasImageSignal: features.hasImage);
-  }
-
-  static String _buildSearchText(ProductFeatures features) {
-    final uri = Uri.tryParse(features.url);
-    final path = uri?.path ?? features.url;
-    final decodedPath = Uri.decodeComponent(path);
-    return _normalize('${features.text} $decodedPath');
   }
 
   static String _normalize(String value) => value.toLowerCase().replaceAll('ё', 'е').replaceAll(RegExp(r'[^\p{L}\p{N}]+', unicode: true), ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
