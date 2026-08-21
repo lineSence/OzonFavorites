@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../models/archive_item.dart';
 import '../models/category.dart';
@@ -24,6 +25,7 @@ class ArchiveScreen extends StatefulWidget {
 }
 
 class _ArchiveScreenState extends State<ArchiveScreen> {
+  static const _shareChannel = MethodChannel('product_boards/share');
   final _normalizer = UrlNormalizer();
   List<ArchiveItem> _items = const [];
   List<Category> _categories = const [];
@@ -73,6 +75,20 @@ class _ArchiveScreenState extends State<ArchiveScreen> {
     if (await _addUrl(url, initialTitle: data?['title']?.toString().trim(), initialImageUri: sharedImage) && mounted) widget.onSharedDataConsumed();
   }
 
+  Future<String?> _resolveScreenshot(String url) async {
+    try {
+      final result = await _shareChannel.invokeMethod<Object?>('resolveProduct', {'url': url});
+      if (result is! Map) return null;
+      final value = result['screenshotUri']?.toString().trim();
+      if (value == null || value.isEmpty || !value.startsWith('file:')) return null;
+      return value;
+    } on PlatformException {
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<bool> _addUrl(String raw, {String? initialTitle, String? initialImageUri}) async {
     final uri = Uri.tryParse(raw.trim());
     if (uri == null || !{'http', 'https'}.contains(uri.scheme.toLowerCase())) {
@@ -84,7 +100,7 @@ class _ArchiveScreenState extends State<ArchiveScreen> {
       if (duplicates.isNotEmpty && !await _confirmDuplicate(duplicates)) return false;
       final now = DateTime.now();
       final hasInitialImage = initialImageUri?.startsWith('file:') == true;
-      final item = ArchiveItem(
+      var item = ArchiveItem(
         id: widget.repository.newId(),
         url: uri.toString(),
         title: initialTitle?.isNotEmpty == true ? initialTitle! : '...',
@@ -98,8 +114,23 @@ class _ArchiveScreenState extends State<ArchiveScreen> {
         updatedAt: now,
       );
       await widget.repository.upsertItem(item);
-      unawaited(widget.queue.enqueue(item));
       await _reload();
+
+      // The Android share intent normally contains only the URL. Marketplace
+      // image URLs are intentionally unsupported. Ask the Android WebView
+      // bridge to render the page and return its local screenshot instead.
+      if (!hasInitialImage) {
+        final screenshot = await _resolveScreenshot(uri.toString());
+        if (screenshot != null) {
+          item = item.copyWith(imageUrl: screenshot, imageStatus: ImageStatus.success, updatedAt: DateTime.now());
+        } else {
+          item = item.copyWith(imageUrl: null, imageStatus: ImageStatus.failed, updatedAt: DateTime.now());
+        }
+        await widget.repository.upsertItem(item);
+        await _reload();
+      }
+
+      unawaited(widget.queue.enqueue(item));
       if (mounted) await _openEditor(item);
       return true;
     } catch (error) {
@@ -243,7 +274,7 @@ class _ArchiveScreenState extends State<ArchiveScreen> {
     ..._categories.map((category) => ListTile(leading: const Icon(Icons.folder_outlined), title: Text(category.name), selected: _categoryId == category.id, onTap: () { Navigator.pop(context); setState(() => _categoryId = category.id); unawaited(_reload()); })),
     const Divider(),
     ListTile(leading: const Icon(Icons.add), title: const Text('Создать подборку'), onTap: () { Navigator.pop(context); unawaited(_createCategory()); }),
-  ])));
+  ]));
 
   Widget _emptyBody(String title) => Center(child: Padding(padding: const EdgeInsets.all(32), child: Column(mainAxisSize: MainAxisSize.min, children: [const Text('🐈', style: TextStyle(fontSize: 60)), const SizedBox(height: 12), Text(title == 'Неразобранное' ? 'Неразобранное пусто' : 'В этой подборке пока нет ссылок', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900), textAlign: TextAlign.center), const SizedBox(height: 8), const Text('Сохраняйте ссылки через кнопку ниже или через Поделиться.', textAlign: TextAlign.center)])));
 
