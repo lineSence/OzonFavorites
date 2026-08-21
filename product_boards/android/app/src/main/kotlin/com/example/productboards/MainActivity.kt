@@ -202,42 +202,80 @@ class MainActivity : FlutterActivity() {
         } catch (_: Exception) { screenshotUri = captureScreenshot(view) }
     }
 
-    private fun captureScreenshot(view: WebView): String? = try {
-        if (view.width <= 0 || view.height <= 0) return null
-        view.measure(View.MeasureSpec.makeMeasureSpec(view.width, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(view.height, View.MeasureSpec.EXACTLY))
-        view.layout(0, 0, view.width, view.height)
-        view.scrollTo(0, 0)
-        val oldAlpha = view.alpha
-        view.alpha = 1f
-        view.setLayerType(View.LAYER_TYPE_SOFTWARE, null)
-        view.invalidate(); view.buildDrawingCache(false)
-        val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(bitmap); canvas.drawColor(android.graphics.Color.WHITE); view.draw(canvas)
-        view.destroyDrawingCache(); view.alpha = oldAlpha
-        val file = File(cacheDir, "pinzon_screenshot_${System.currentTimeMillis()}.jpg")
-        FileOutputStream(file).use { out -> if (!bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)) { bitmap.recycle(); return null }; out.flush() }
-        bitmap.recycle()
-        log("SCREENSHOT_SAVED", mapOf("uri" to file.toURI().toString(), "width" to view.width, "height" to view.height, "bytes" to file.length()))
-        file.toURI().toString()
-    } catch (_: Exception) { null }
+    private fun captureScreenshot(view: WebView): String? {
+        try {
+            if (view.width <= 0 || view.height <= 0) return null
+            view.measure(View.MeasureSpec.makeMeasureSpec(view.width, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(view.height, View.MeasureSpec.EXACTLY))
+            view.layout(0, 0, view.width, view.height)
+            view.scrollTo(0, 0)
+            val oldAlpha = view.alpha
+            view.alpha = 1f
+            view.setLayerType(View.LAYER_TYPE_SOFTWARE, null)
+            view.invalidate()
+            view.buildDrawingCache(false)
+            val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(bitmap)
+            canvas.drawColor(android.graphics.Color.WHITE)
+            view.draw(canvas)
+            view.destroyDrawingCache()
+            view.alpha = oldAlpha
+            val file = File(cacheDir, "pinzon_screenshot_${System.currentTimeMillis()}.jpg")
+            FileOutputStream(file).use { out ->
+                if (!bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)) {
+                    bitmap.recycle()
+                    return null
+                }
+                out.flush()
+            }
+            bitmap.recycle()
+            log("SCREENSHOT_SAVED", mapOf("uri" to file.toURI().toString(), "width" to view.width, "height" to view.height, "bytes" to file.length()))
+            return file.toURI().toString()
+        } catch (_: Exception) {
+            return null
+        }
+    }
 
     private fun log(stage: String, details: Map<String, Any?> = emptyMap()) {
-        val event = linkedMapOf<String, Any?>("stage" to stage, "timestampMs" to System.currentTimeMillis()); event.putAll(details); events.add(event); if (events.size > 200) events.removeAt(0)
+        val event = linkedMapOf<String, Any?>("stage" to stage, "timestampMs" to System.currentTimeMillis())
+        event.putAll(details)
+        events.add(event)
+        if (events.size > 200) events.removeAt(0)
     }
 
     private fun finish(data: Map<String, Any?>?, reason: String) {
         if (finished) return
         finished = true
         val request = active
-        val payload = linkedMapOf<String, Any?>(); if (data != null) payload.putAll(data)
-        payload["originalUrl"] = payload["originalUrl"] ?: request?.url; payload["finalUrl"] = payload["finalUrl"] ?: finalUrl ?: webView?.url
-        payload["pageTitle"] = payload["pageTitle"] ?: pageTitle ?: webView?.title; payload["reason"] = reason; payload["attempts"] = attempt
-        payload["screenshotUri"] = payload["screenshotUri"] ?: screenshotUri; payload["diagnostics"] = events.toList()
+        val payload = linkedMapOf<String, Any?>()
+        if (data != null) payload.putAll(data)
+        payload["originalUrl"] = payload["originalUrl"] ?: request?.url
+        payload["finalUrl"] = payload["finalUrl"] ?: finalUrl ?: webView?.url
+        payload["pageTitle"] = payload["pageTitle"] ?: pageTitle ?: webView?.title
+        payload["reason"] = reason
+        payload["attempts"] = attempt
+        payload["screenshotUri"] = payload["screenshotUri"] ?: screenshotUri
+        payload["diagnostics"] = events.toList()
         val result = request?.result
-        cleanupWebView(); active = null; handler.removeCallbacksAndMessages(null); result?.success(payload); startNext()
+        cleanupWebView()
+        active = null
+        handler.removeCallbacksAndMessages(null)
+        result?.success(payload)
+        startNext()
     }
 
-    private fun cleanupWebView() { webView?.stopLoading(); (webView?.parent as? FrameLayout)?.removeView(webView); webView?.destroy(); webView = null }
+    private fun cleanupWebView() {
+        webView?.stopLoading()
+        (webView?.parent as? FrameLayout)?.removeView(webView)
+        webView?.destroy()
+        webView = null
+    }
+
     private fun extractUrl(text: String): String? = Regex("https?://[^\\s]+", RegexOption.IGNORE_CASE).find(text)?.value?.trimEnd('.', ',', ';', ')', ']', '}')
-    @Suppress("DEPRECATION") private fun getStreamUri(intent: Intent): Uri? = if (android.os.Build.VERSION.SDK_INT >= 33) intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java) else intent.getParcelableExtra(Intent.EXTRA_STREAM)
+
+    @Suppress("DEPRECATION")
+    private fun getStreamUri(intent: Intent): Uri? = if (android.os.Build.VERSION.SDK_INT >= 33) {
+        intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+    } else {
+        intent.getParcelableExtra(Intent.EXTRA_STREAM)
+    }
 }
