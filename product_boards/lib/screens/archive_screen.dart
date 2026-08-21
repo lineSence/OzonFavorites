@@ -116,9 +116,8 @@ class _ArchiveScreenState extends State<ArchiveScreen> {
       await widget.repository.upsertItem(item);
       await _reload();
 
-      // The Android share intent normally contains only the URL. Marketplace
-      // image URLs are intentionally unsupported. Ask the Android WebView
-      // bridge to render the page and return its local screenshot instead.
+      // Marketplace image URLs are intentionally unsupported. Ask the Android
+      // WebView bridge to render the page and return its local screenshot.
       if (!hasInitialImage) {
         final screenshot = await _resolveScreenshot(uri.toString());
         if (screenshot != null) {
@@ -274,7 +273,7 @@ class _ArchiveScreenState extends State<ArchiveScreen> {
     ..._categories.map((category) => ListTile(leading: const Icon(Icons.folder_outlined), title: Text(category.name), selected: _categoryId == category.id, onTap: () { Navigator.pop(context); setState(() => _categoryId = category.id); unawaited(_reload()); })),
     const Divider(),
     ListTile(leading: const Icon(Icons.add), title: const Text('Создать подборку'), onTap: () { Navigator.pop(context); unawaited(_createCategory()); }),
-  ]));
+  ])));
 
   Widget _emptyBody(String title) => Center(child: Padding(padding: const EdgeInsets.all(32), child: Column(mainAxisSize: MainAxisSize.min, children: [const Text('🐈', style: TextStyle(fontSize: 60)), const SizedBox(height: 12), Text(title == 'Неразобранное' ? 'Неразобранное пусто' : 'В этой подборке пока нет ссылок', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900), textAlign: TextAlign.center), const SizedBox(height: 8), const Text('Сохраняйте ссылки через кнопку ниже или через Поделиться.', textAlign: TextAlign.center)])));
 
