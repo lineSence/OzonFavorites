@@ -3,10 +3,10 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 class ArchiveImage extends StatelessWidget {
-  const ArchiveImage({super.key, required this.value, required this.height, this.borderRadius});
+  const ArchiveImage({super.key, required this.value, this.height, this.borderRadius});
 
   final String? value;
-  final double height;
+  final double? height;
   final BorderRadius? borderRadius;
 
   @override
@@ -15,7 +15,8 @@ class ArchiveImage extends StatelessWidget {
     final child = provider == null
         ? _placeholder()
         : Image(image: provider, height: height, width: double.infinity, fit: BoxFit.cover, errorBuilder: (_, __, ___) => _placeholder());
-    return borderRadius == null ? child : ClipRRect(borderRadius: borderRadius!, child: child);
+    final sized = height == null ? SizedBox.expand(child: child) : child;
+    return borderRadius == null ? sized : ClipRRect(borderRadius: borderRadius!, child: sized);
   }
 
   Widget _placeholder() => Container(height: height, color: const Color(0xffecece9), alignment: Alignment.center, child: const Text('🐈', style: TextStyle(fontSize: 64)));
