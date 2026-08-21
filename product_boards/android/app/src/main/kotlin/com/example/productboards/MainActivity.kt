@@ -151,8 +151,19 @@ class MainActivity : FlutterActivity() {
         attempt++
         finalUrl = view.url ?: finalUrl
         pageTitle = view.title ?: pageTitle
-        if (isScreenshotAllowed(finalUrl, pageTitle)) prepareWebViewForScreenshot(view)
+        if (isScreenshotAllowed(finalUrl, pageTitle)) {
+            prepareWebViewForScreenshot(view) { screenshot ->
+                screenshotUri = screenshot
+                extractMetadataAndFinish(view)
+            }
+        } else {
+            log("SCREENSHOT_SKIPPED", mapOf("url" to finalUrl, "title" to pageTitle))
+            extractMetadataAndFinish(view)
+        }
+    }
 
+    private fun extractMetadataAndFinish(view: WebView) {
+        if (finished) return
         val script = """
             (function(){
               const clean=v=>v==null?null:String(v).replace(/\\s+/g,' ').trim();
@@ -189,17 +200,19 @@ class MainActivity : FlutterActivity() {
         return listOf("captcha", "challenge", "access denied", "forbidden", "403", "antibot", "robot").none { u.contains(it) || t.contains(it) }
     }
 
-    private fun prepareWebViewForScreenshot(view: WebView) {
+    private fun prepareWebViewForScreenshot(view: WebView, callback: (String?) -> Unit) {
         val script = """(function(){return Math.min(Math.max(Math.max(document.documentElement?.scrollHeight||0,document.body?.scrollHeight||0,document.documentElement?.offsetHeight||0),1600),2800);})();"""
         try {
             view.evaluateJavascript(script) { raw ->
                 val height = raw?.toIntOrNull()?.coerceIn(1600, 2800) ?: 1600
                 view.post {
                     (view.layoutParams as? FrameLayout.LayoutParams)?.let { it.width = 900; it.height = height; view.layoutParams = it }
-                    handler.postDelayed({ screenshotUri = captureScreenshot(view) }, 250L)
+                    view.measure(View.MeasureSpec.makeMeasureSpec(900, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY))
+                    view.layout(0, 0, 900, height)
+                    handler.postDelayed({ callback(captureScreenshot(view)) }, 250L)
                 }
             }
-        } catch (_: Exception) { screenshotUri = captureScreenshot(view) }
+        } catch (_: Exception) { callback(captureScreenshot(view)) }
     }
 
     private fun captureScreenshot(view: WebView): String? {
@@ -212,12 +225,10 @@ class MainActivity : FlutterActivity() {
             view.alpha = 1f
             view.setLayerType(View.LAYER_TYPE_SOFTWARE, null)
             view.invalidate()
-            view.buildDrawingCache(false)
             val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
             val canvas = Canvas(bitmap)
             canvas.drawColor(android.graphics.Color.WHITE)
             view.draw(canvas)
-            view.destroyDrawingCache()
             view.alpha = oldAlpha
             val file = File(cacheDir, "pinzon_screenshot_${System.currentTimeMillis()}.jpg")
             FileOutputStream(file).use { out ->
@@ -227,10 +238,12 @@ class MainActivity : FlutterActivity() {
                 }
                 out.flush()
             }
+            val bytes = file.length()
             bitmap.recycle()
-            log("SCREENSHOT_SAVED", mapOf("uri" to file.toURI().toString(), "width" to view.width, "height" to view.height, "bytes" to file.length()))
-            return file.toURI().toString()
-        } catch (_: Exception) {
+            log("SCREENSHOT_SAVED", mapOf("uri" to file.toURI().toString(), "width" to view.width, "height" to view.height, "bytes" to bytes))
+            return if (bytes > 4096) file.toURI().toString() else null
+        } catch (error: Exception) {
+            log("SCREENSHOT_FAILED", mapOf("error" to error.toString()))
             return null
         }
     }
