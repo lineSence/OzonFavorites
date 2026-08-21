@@ -61,7 +61,7 @@ class SmartSortService {
 
   SmartSortResult classify(ArchiveItem item) {
     final features = ProductFeatures.fromItem(item);
-    final text = _normalize('${features.text} ${Uri.tryParse(features.url)?.path ?? features.url}');
+    final text = _buildSearchText(features);
     final scores = <String, double>{};
     final matches = <String, List<String>>{};
 
@@ -95,10 +95,17 @@ class SmartSortService {
     final ranked = scores.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
     final top = ranked.first;
     final second = ranked.length > 1 ? ranked[1] : null;
-    final normalizedScore = (top.value / (top.value + (second?.value ?? 0) + 1.5)).clamp(0.0, .98).toDouble();
-    final alternatives = ranked.skip(1).take(2).map((e) => SmartSortAlternative(category: e.key, score: (e.value / (top.value + 1.5)).clamp(0.0, .99).toDouble())).toList();
+    final normalizedScore = (top.value / (top.value + (second?.value ?? 0) + .5)).clamp(0.0, .98).toDouble();
+    final alternatives = ranked.skip(1).take(2).map((e) => SmartSortAlternative(category: e.key, score: (e.value / (top.value + .5)).clamp(0.0, .99).toDouble())).toList();
 
     return SmartSortResult(item: item, category: top.key, score: normalizedScore, matchedKeywords: matches[top.key] ?? const [], alternatives: alternatives, hasImageSignal: features.hasImage);
+  }
+
+  static String _buildSearchText(ProductFeatures features) {
+    final uri = Uri.tryParse(features.url);
+    final path = uri?.path ?? features.url;
+    final decodedPath = Uri.decodeComponent(path);
+    return _normalize('${features.text} $decodedPath');
   }
 
   static String _normalize(String value) => value.toLowerCase().replaceAll('ё', 'е').replaceAll(RegExp(r'[^\p{L}\p{N}]+', unicode: true), ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
