@@ -13,6 +13,7 @@ import 'archive_repository.dart';
 class LocalArchiveRepository implements ArchiveRepository {
   static const _dbName = 'product_boards.sqlite';
   static const _version = 3;
+
   final Uuid _uuid = const Uuid();
   final UrlNormalizer normalizer;
   Database? _db;
@@ -21,28 +22,30 @@ class LocalArchiveRepository implements ArchiveRepository {
 
   @override
   Future<void> init() async {
+    if (_db != null) return;
     final path = p.join((await getApplicationDocumentsDirectory()).path, _dbName);
     _db = await openDatabase(path, version: _version, onCreate: _onCreate, onUpgrade: _onUpgrade);
   }
 
-  Future<void> _onCreate(Database db, int version) async {
-    await db.execute('CREATE TABLE archive_items (id TEXT PRIMARY KEY, data TEXT NOT NULL, normalized_url TEXT NOT NULL)');
-    await db.execute('CREATE INDEX idx_archive_items_normalized_url ON archive_items(normalized_url)');
-    await db.execute('CREATE TABLE categories (id TEXT PRIMARY KEY, data TEXT NOT NULL)');
-  }
+  Future<void> _onCreate(Database db, int version) async => _ensureArchiveSchema(db);
 
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
-    if (oldVersion >= 3) return;
-    await _onCreate(db, _version);
-    await _migrateLegacy(db);
+    await _ensureArchiveSchema(db);
+    if (oldVersion < 3) await _migrateLegacy(db);
+  }
+
+  Future<void> _ensureArchiveSchema(Database db) async {
+    await db.execute('CREATE TABLE IF NOT EXISTS archive_items (id TEXT PRIMARY KEY, data TEXT NOT NULL, normalized_url TEXT NOT NULL)');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_archive_items_normalized_url ON archive_items(normalized_url)');
+    await db.execute('CREATE TABLE IF NOT EXISTS categories (id TEXT PRIMARY KEY, data TEXT NOT NULL)');
   }
 
   Future<void> _migrateLegacy(Database db) async {
     final rows = await db.rawQuery("SELECT name FROM sqlite_master WHERE type='table'");
     final names = rows.map((r) => r['name']?.toString()).toSet();
     if (!names.contains('products')) return;
-    final categoryMap = <String, String>{};
 
+    final categoryMap = <String, String>{};
     if (names.contains('boards')) {
       for (final row in await db.query('boards')) {
         try {
@@ -71,8 +74,8 @@ class LocalArchiveRepository implements ArchiveRepository {
         final categoryId = boardIds.isEmpty ? null : categoryMap[boardIds.first];
         final title = raw['title']?.toString().trim();
         final image = raw['imageUrl']?.toString();
-        final now = DateTime.tryParse(raw['updatedAt']?.toString() ?? '') ?? DateTime.now();
-        final created = DateTime.tryParse(raw['createdAt']?.toString() ?? '') ?? now;
+        final updated = DateTime.tryParse(raw['updatedAt']?.toString() ?? '') ?? DateTime.now();
+        final created = DateTime.tryParse(raw['createdAt']?.toString() ?? '') ?? updated;
         final item = ArchiveItem(
           id: id,
           url: url,
@@ -84,7 +87,7 @@ class LocalArchiveRepository implements ArchiveRepository {
           categoryId: categoryId,
           metadataStatus: image == null || image.isEmpty ? MetadataStatus.partial : MetadataStatus.success,
           createdAt: created,
-          updatedAt: now,
+          updatedAt: updated,
         );
         await db.insert('archive_items', {'id': id, 'data': jsonEncode(item.toJson()), 'normalized_url': normalizer.normalize(url)}, conflictAlgorithm: ConflictAlgorithm.ignore);
       } catch (_) {}
@@ -103,15 +106,13 @@ class LocalArchiveRepository implements ArchiveRepository {
 
   @override
   String newId() => _uuid.v4();
+
   Database get _database => _db!;
 
   @override
   Future<List<ArchiveItem>> getItems({String? categoryId}) async {
     final rows = await _database.query('archive_items');
-    final items = rows
-        .map((row) => ArchiveItem.fromJson(jsonDecode(row['data']! as String) as Map<String, dynamic>))
-        .where((item) => item.categoryId == categoryId)
-        .toList();
+    final items = rows.map((row) => ArchiveItem.fromJson(jsonDecode(row['data']! as String) as Map<String, dynamic>)).where((item) => item.categoryId == categoryId).toList();
     items.sort((a, b) => b.createdAt.compareTo(a.createdAt));
     return items;
   }
@@ -137,9 +138,7 @@ class LocalArchiveRepository implements ArchiveRepository {
   @override
   Future<void> deleteItems(Iterable<String> ids) async {
     await _database.transaction((txn) async {
-      for (final id in ids) {
-        await txn.delete('archive_items', where: 'id = ?', whereArgs: [id]);
-      }
+      for (final id in ids) await txn.delete('archive_items', where: 'id = ?', whereArgs: [id]);
     });
   }
 
@@ -150,7 +149,8 @@ class LocalArchiveRepository implements ArchiveRepository {
         final rows = await txn.query('archive_items', where: 'id = ?', whereArgs: [id], limit: 1);
         if (rows.isEmpty) continue;
         final item = ArchiveItem.fromJson(jsonDecode(rows.first['data']! as String) as Map<String, dynamic>);
-        await txn.update('archive_items', {'data': jsonEncode(item.copyWith(categoryId: categoryId, updatedAt: DateTime.now()).toJson())}, where: 'id = ?', whereArgs: [id]);
+        final updated = item.copyWith(categoryId: categoryId, updatedAt: DateTime.now());
+        await txn.update('archive_items', {'data': jsonEncode(updated.toJson())}, where: 'id = ?', whereArgs: [id]);
       }
     });
   }
@@ -182,7 +182,8 @@ class LocalArchiveRepository implements ArchiveRepository {
       for (final row in rows) {
         final item = ArchiveItem.fromJson(jsonDecode(row['data']! as String) as Map<String, dynamic>);
         if (item.categoryId == id) {
-          await txn.update('archive_items', {'data': jsonEncode(item.copyWith(categoryId: null, updatedAt: DateTime.now()).toJson())}, where: 'id = ?', whereArgs: [item.id]);
+          final updated = item.copyWith(categoryId: null, updatedAt: DateTime.now());
+          await txn.update('archive_items', {'data': jsonEncode(updated.toJson())}, where: 'id = ?', whereArgs: [item.id]);
         }
       }
       await txn.delete('categories', where: 'id = ?', whereArgs: [id]);
@@ -190,5 +191,9 @@ class LocalArchiveRepository implements ArchiveRepository {
   }
 
   @override
-  Future<void> close() async => _database.close();
+  Future<void> close() async {
+    final db = _db;
+    _db = null;
+    if (db != null) await db.close();
+  }
 }
