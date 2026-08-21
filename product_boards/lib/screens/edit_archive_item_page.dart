@@ -4,6 +4,7 @@ import '../models/archive_item.dart';
 import '../models/category.dart';
 import '../repositories/archive_repository.dart';
 import '../services/metadata_queue.dart';
+import '../widgets/archive_image.dart';
 
 class EditArchiveItemPage extends StatefulWidget {
   const EditArchiveItemPage({super.key, required this.repository, required this.queue, required this.item});
@@ -72,17 +73,7 @@ class _EditArchiveItemPageState extends State<EditArchiveItemPage> {
   }
 
   Future<void> _delete() async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Удалить эту ссылку?'),
-        content: const Text('Объект будет удалён из архива.'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Отмена')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Удалить')),
-        ],
-      ),
-    );
+    final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(title: const Text('Удалить эту ссылку?'), content: const Text('Объект будет удалён из архива.'), actions: [TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Отмена')), FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Удалить'))]));
     if (ok != true) return;
     await widget.repository.deleteItem(widget.item.id);
     if (mounted) Navigator.pop(context);
@@ -94,7 +85,7 @@ class _EditArchiveItemPageState extends State<EditArchiveItemPage> {
     return Scaffold(
       appBar: AppBar(title: const Text('Редактировать')),
       body: ListView(padding: const EdgeInsets.all(16), children: [
-        const SizedBox(height: 180, child: Center(child: Icon(Icons.image_outlined, size: 56))),
+        ArchiveImage(value: widget.item.imageUrl, height: 240, borderRadius: BorderRadius.circular(18)),
         const SizedBox(height: 18),
         TextField(controller: _titleController, onChanged: (_) => _titleTouched = true, decoration: const InputDecoration(labelText: 'Название', border: OutlineInputBorder())),
         const SizedBox(height: 12),
