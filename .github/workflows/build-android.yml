@@ -22,6 +22,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Detect Flutter project root
         id: project
@@ -164,4 +166,28 @@ jobs:
         with:
           name: product-boards-aab
           path: ${{ steps.project.outputs.project_dir }}/build/app/outputs/bundle/release/app-release.aab
+          if-no-files-found: error
+
+      - name: Build LLM analysis bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUNDLE_DIR="$RUNNER_TEMP/pinzon-llm-bundle"
+          mkdir -p "$BUNDLE_DIR"
+          git rev-parse HEAD > "$BUNDLE_DIR/SNAPSHOT_COMMIT.txt"
+          git log --oneline --decorate --all > "$BUNDLE_DIR/GIT_HISTORY_ONELINE.txt"
+          git remote -v > "$BUNDLE_DIR/GIT_REMOTES.txt"
+          git status --short > "$BUNDLE_DIR/GIT_STATUS.txt"
+          git ls-files > "$BUNDLE_DIR/REPOSITORY_FILE_LIST.txt"
+          printf 'Repository: lineSence/OzonFavorites\nSnapshot commit: %s\nGenerated: %s\nHistory: full checkout (fetch-depth=0)\n' "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$BUNDLE_DIR/BUNDLE_MANIFEST.txt"
+          mkdir -p "$BUNDLE_DIR/repository"
+          tar --exclude='./build' --exclude='./.dart_tool' --exclude='./android/.gradle' --exclude='./android/app/release-keystore.jks' -czf "$BUNDLE_DIR/pinzon-repository-with-git.tar.gz" .
+          cp "$BUNDLE_DIR"/*.txt "$BUNDLE_DIR/repository/"
+          tar -czf "$RUNNER_TEMP/pinzon-llm-analysis-bundle.tar.gz" -C "$BUNDLE_DIR" .
+
+      - name: Upload LLM analysis bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: pinzon-llm-analysis-bundle
+          path: ${{ runner.temp }}/pinzon-llm-analysis-bundle.tar.gz
           if-no-files-found: error
