@@ -8,6 +8,7 @@ on:
       - main
       - master
       - fix/android-gradle-compat
+      - refactor/ai-ready-v2
 
 permissions:
   contents: read
@@ -18,6 +19,7 @@ jobs:
     env:
       FLUTTER_VERSION: '3.38.1'
       GRADLE_VERSION: '8.13'
+      PUB_CACHE: ${{ github.workspace }}/.pub-cache
 
     steps:
       - name: Checkout
@@ -28,18 +30,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "Searching for pubspec.yaml..."
           PUBSPEC_PATH="$(find . -name pubspec.yaml -not -path '*/.dart_tool/*' -print -quit)"
-          if [ -z "$PUBSPEC_PATH" ]; then
-            echo "No pubspec.yaml found in repository."
-            exit 1
-          fi
+          if [ -z "$PUBSPEC_PATH" ]; then exit 1; fi
           PROJECT_DIR="$(dirname "$PUBSPEC_PATH")"
           PROJECT_DIR="${PROJECT_DIR#./}"
-          if [ "$PROJECT_DIR" = "." ]; then
-            PROJECT_DIR=""
-          fi
-          echo "Detected Flutter project: ${PROJECT_DIR:-.}"
+          if [ "$PROJECT_DIR" = "." ]; then PROJECT_DIR=""; fi
           echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
 
       - name: Set up Flutter
@@ -55,6 +50,16 @@ jobs:
       - name: Get dependencies
         working-directory: ${{ steps.project.outputs.project_dir }}
         run: flutter pub get
+
+      - name: Validate native assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Never reuse a partially downloaded/corrupted native asset cache.
+          # Native assets such as sqlite3 are restored by pub get and must be
+          # validated by the Flutter tool before tests run.
+          flutter pub cache repair
+          flutter pub get
 
       - name: Analyze
         working-directory: ${{ steps.project.outputs.project_dir }}
@@ -84,14 +89,7 @@ jobs:
           rm -f gradle/wrapper/gradle-wrapper.jar
           gradle wrapper --gradle-version "${GRADLE_VERSION}" --distribution-type all
           test -s gradle/wrapper/gradle-wrapper.jar
-          echo "Generated Gradle Wrapper:"
-          ls -lh gradle/wrapper/gradle-wrapper.jar
 
-      # Если в репозитории заданы секреты с постоянным keystore,
-      # сборка подписывается им (можно публиковать в Google Play и
-      # обновлять приложение поверх предыдущих артефактов).
-      # Иначе генерируется одноразовый ключ: APK устанавливается,
-      # но такой AAB нельзя публиковать в Play.
       - name: Configure release signing
         working-directory: ${{ steps.project.outputs.project_dir }}/android
         shell: bash
@@ -106,32 +104,11 @@ jobs:
           if [ -n "${ANDROID_KEYSTORE_BASE64}" ]; then
             echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > app/release-keystore.jks
             test -s app/release-keystore.jks
-            printf '%s\n' \
-              "storePassword=${ANDROID_KEYSTORE_PASSWORD}" \
-              "keyPassword=${ANDROID_KEY_PASSWORD}" \
-              "keyAlias=${ANDROID_KEY_ALIAS}" \
-              'storeFile=release-keystore.jks' \
-              > key.properties
-            echo "Using permanent release keystore from secrets."
+            printf '%s\n' "storePassword=${ANDROID_KEYSTORE_PASSWORD}" "keyPassword=${ANDROID_KEY_PASSWORD}" "keyAlias=${ANDROID_KEY_ALIAS}" 'storeFile=release-keystore.jks' > key.properties
           else
-            keytool -genkeypair -v \
-              -keystore app/release-keystore.jks \
-              -storepass github-actions \
-              -keypass github-actions \
-              -alias productboards \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 10000 \
-              -dname "CN=Product Boards, OU=Build, O=Product Boards, L=Amsterdam, ST=NH, C=NL"
-            printf '%s\n' \
-              'storePassword=github-actions' \
-              'keyPassword=github-actions' \
-              'keyAlias=productboards' \
-              'storeFile=release-keystore.jks' \
-              > key.properties
-            echo "No ANDROID_KEYSTORE_BASE64 secret; using throwaway CI keystore (installable APK only)."
+            keytool -genkeypair -v -keystore app/release-keystore.jks -storepass github-actions -keypass github-actions -alias productboards -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Product Boards, OU=Build, O=Product Boards, L=Amsterdam, ST=NH, C=NL"
+            printf '%s\n' 'storePassword=github-actions' 'keyPassword=github-actions' 'keyAlias=productboards' 'storeFile=release-keystore.jks' > key.properties
           fi
-          ls -lh app/release-keystore.jks key.properties
 
       - name: Build release APK
         working-directory: ${{ steps.project.outputs.project_dir }}
