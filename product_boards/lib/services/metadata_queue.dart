@@ -4,6 +4,10 @@ import '../models/archive_item.dart';
 import '../repositories/archive_repository.dart';
 import 'metadata_service.dart';
 
+/// Background queue for text metadata only.
+///
+/// Images are produced exclusively by the Android WebView screenshot pipeline
+/// and must never be populated or replaced by this queue.
 class MetadataQueue {
   MetadataQueue({required this.repository, MetadataService? service}) : service = service ?? MetadataService();
 
@@ -44,12 +48,12 @@ class MetadataQueue {
       try {
         final result = await service.fetch(Uri.parse(initial.url));
         final titleOk = result.title?.trim().isNotEmpty == true;
-        final imageOk = result.imageUrl?.trim().isNotEmpty == true;
         final next = initial.copyWith(
           title: initial.titleSource == TitleSource.manual ? initial.title : (titleOk ? result.title! : initial.title),
-          imageUrl: imageOk ? result.imageUrl : initial.imageUrl,
-          imageStatus: imageOk || initial.imageUrl != null ? ImageStatus.success : ImageStatus.failed,
-          metadataStatus: titleOk && (imageOk || initial.imageUrl != null) ? MetadataStatus.success : (titleOk || imageOk ? MetadataStatus.partial : MetadataStatus.failed),
+          // Deliberately preserve the existing screenshot-derived image fields.
+          imageUrl: initial.imageUrl,
+          imageStatus: initial.imageStatus,
+          metadataStatus: titleOk ? MetadataStatus.success : MetadataStatus.partial,
           updatedAt: DateTime.now(),
         );
         await repository.upsertItem(next);
@@ -69,7 +73,9 @@ class MetadataQueue {
     if (lastError) {
       final failed = initial.copyWith(
         title: initial.titleSource == TitleSource.manual ? initial.title : initial.title.isEmpty ? 'Без названия' : initial.title,
-        imageStatus: initial.imageUrl == null ? ImageStatus.failed : ImageStatus.success,
+        // Never mark a screenshot as failed merely because text metadata failed.
+        imageUrl: initial.imageUrl,
+        imageStatus: initial.imageStatus,
         metadataStatus: MetadataStatus.failed,
         updatedAt: DateTime.now(),
       );
