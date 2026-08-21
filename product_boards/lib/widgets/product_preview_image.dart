@@ -1,12 +1,12 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+
 import '../models/product_preview.dart';
 import '../screens/image_diagnostics_screen.dart';
-import 'product_card.dart';
 
 class ProductPreviewImage extends StatelessWidget {
-  const ProductPreviewImage({super.key, required this.preview, this.fit = BoxFit.cover});
+  const ProductPreviewImage({super.key, required this.preview, this.fit = BoxFit.contain});
 
   final ProductPreview preview;
   final BoxFit fit;
@@ -21,7 +21,7 @@ class ProductPreviewImage extends StatelessWidget {
     return Stack(
       fit: StackFit.expand,
       children: [
-        image,
+        Container(color: const Color(0xfff1f1ee), child: image),
         Positioned(
           top: 8,
           right: 8,
@@ -61,4 +61,16 @@ class ProductPreviewImage extends StatelessWidget {
       errorBuilder: (_, __, ___) => const PlaceholderImage(),
     );
   }
+}
+
+class PlaceholderImage extends StatelessWidget {
+  const PlaceholderImage({super.key});
+
+  @override
+  Widget build(BuildContext context) => Container(
+        color: const Color(0xffecece9),
+        alignment: Alignment.center,
+        child: const Text('🐈', style: TextStyle(fontSize: 52),
+        ),
+      );
 }
