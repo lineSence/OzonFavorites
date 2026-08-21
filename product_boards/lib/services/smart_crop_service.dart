@@ -79,7 +79,13 @@ class SmartCropService {
       return _unchanged(source, decoded, confidence: confidence);
     }
 
-    final output = img.copyCrop(decoded, x: x1, y: y1, width: cropWidth, height: cropHeight);
+    final output = img.copyCrop(
+      decoded,
+      x: x1.toInt(),
+      y: y1.toInt(),
+      width: cropWidth.toInt(),
+      height: cropHeight.toInt(),
+    );
     final outputPath = p.join(
       source.parent.path,
       '${p.basenameWithoutExtension(source.path)}_smart_v$_version.jpg',
@@ -92,10 +98,10 @@ class SmartCropService {
       outputPath: outputFile.path,
       changed: true,
       confidence: confidence,
-      left: x1,
-      top: y1,
-      right: x2,
-      bottom: y2,
+      left: x1.toInt(),
+      top: y1.toInt(),
+      right: x2.toInt(),
+      bottom: y2.toInt(),
     );
   }
 
@@ -112,8 +118,12 @@ class SmartCropService {
 
   double _confidence(_Band? top, _Band? bottom, double removedRatio) {
     var score = 0.0;
-    if (top != null) score += top.confidence * 0.55;
-    if (bottom != null) score += bottom.confidence * 0.35;
+    if (top != null) {
+      score += top.confidence * 0.55;
+    }
+    if (bottom != null) {
+      score += bottom.confidence * 0.35;
+    }
     if (removedRatio >= 0.05) score += 0.10;
     return score.clamp(0.0, 1.0).toDouble();
   }
@@ -123,7 +133,8 @@ class SmartCropService {
     final end = image.height - 2;
     _Band? best;
 
-    for (var y = start; y < end; y += math.max(2, image.height ~/ 320)) {
+    final step = math.max(2, image.height ~/ 320).toInt();
+    for (var y = start; y < end; y += step) {
       final stats = _rowStats(image, y);
       if (stats.lightRatio < 0.72 || stats.darkRatio < 0.015 || stats.darkRatio > 0.28) continue;
 
@@ -143,17 +154,18 @@ class SmartCropService {
 
   _Band? _detectTopPromo(img.Image image) {
     final maxY = (image.height * _maxTopCrop).floor();
-    final bottomLimit = math.min(maxY, (image.height * 0.34).floor());
-    final step = math.max(2, image.height ~/ 320);
+    final bottomLimit = math.min(maxY, (image.height * 0.34).floor()).toInt();
+    final step = math.max(2, image.height ~/ 320).toInt();
     _Band? best;
 
-    for (var y = (image.height * 0.035).floor(); y < bottomLimit; y += step) {
+    final startY = (image.height * 0.035).floor();
+    for (var y = startY; y < bottomLimit; y += step) {
       final above = _rowStats(image, y);
-      final belowY = math.min(image.height - 1, y + math.max(8, image.height ~/ 45));
+      final belowY = math.min(image.height - 1, y + math.max(8, image.height ~/ 45).toInt()).toInt();
       final below = _rowStats(image, belowY);
       final varianceDelta = (above.lumaVariance - below.lumaVariance).abs();
       final colorDelta = (above.colorfulness - below.colorfulness).abs();
-      final structure = _horizontalClusterScore(image, math.max(0, y - 2), belowY);
+      final structure = _horizontalClusterScore(image, math.max(0, y - 2).toInt(), belowY);
       final score = (varianceDelta * 2.4 + colorDelta * 1.8 + structure * 0.45).clamp(0.0, 1.0).toDouble();
       if (score < 0.50) continue;
 
@@ -183,7 +195,7 @@ class SmartCropService {
     var lumaSum = 0.0;
     var lumaSq = 0.0;
     var colorSum = 0.0;
-    final step = math.max(1, image.width ~/ 120);
+    final step = math.max(1, image.width ~/ 120).toInt();
     var samples = 0;
 
     for (var x = 0; x < image.width; x += step) {
@@ -203,7 +215,7 @@ class SmartCropService {
     }
 
     final mean = samples == 0 ? 0.0 : lumaSum / samples;
-    final variance = samples == 0 ? 0.0 : math.max(0.0, lumaSq / samples - mean * mean);
+    final variance = samples == 0 ? 0.0 : math.max(0.0, lumaSq / samples - mean * mean).toDouble();
     return _RowStats(
       lightRatio: samples == 0 ? 0 : light / samples,
       darkRatio: samples == 0 ? 0 : dark / samples,
@@ -214,7 +226,7 @@ class SmartCropService {
 
   _RowStats _columnStats(img.Image image, int x) {
     var light = 0;
-    final step = math.max(1, image.height ~/ 120);
+    final step = math.max(1, image.height ~/ 120).toInt();
     var samples = 0;
     for (var y = 0; y < image.height; y += step) {
       final px = image.getPixel(x, y);
@@ -227,8 +239,8 @@ class SmartCropService {
 
   double _horizontalClusterScore(img.Image image, int y1, int y2) {
     final width = image.width;
-    final stepX = math.max(1, width ~/ 100);
-    final stepY = math.max(1, (y2 - y1) ~/ 20);
+    final stepX = math.max(1, width ~/ 100).toInt();
+    final stepY = math.max(1, (y2 - y1) ~/ 20).toInt();
     var transitions = 0;
     var samples = 0;
     var previousDark = false;
