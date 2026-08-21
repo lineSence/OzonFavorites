@@ -1,8 +1,7 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 
 import '../models/archive_item.dart';
+import 'archive_image.dart';
 
 class ArchiveCard extends StatelessWidget {
   const ArchiveCard({super.key, required this.item, required this.onTap, required this.onAction, required this.selected, required this.selectionMode});
@@ -13,14 +12,6 @@ class ArchiveCard extends StatelessWidget {
   final bool selected;
   final bool selectionMode;
 
-  ImageProvider<Object>? get _provider {
-    final value = item.imageUrl;
-    if (value == null || value.isEmpty) return null;
-    final uri = Uri.tryParse(value);
-    if (uri?.scheme == 'file') return FileImage(File(uri!.toFilePath()));
-    return NetworkImage(value);
-  }
-
   @override
   Widget build(BuildContext context) => Material(
         color: Colors.white,
@@ -30,7 +21,7 @@ class ArchiveCard extends StatelessWidget {
           onTap: onTap,
           child: Stack(children: [
             Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Expanded(child: _image()),
+              Expanded(child: ArchiveImage(value: item.imageUrl, height: double.infinity)),
               Padding(padding: const EdgeInsets.fromLTRB(12, 10, 44, 12), child: Text(item.title, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800))),
             ]),
             if (!selectionMode) Positioned(right: 2, bottom: 2, child: IconButton(onPressed: onAction, icon: const Icon(Icons.north_east), tooltip: 'Переместить')),
@@ -39,12 +30,4 @@ class ArchiveCard extends StatelessWidget {
           ]),
         ),
       );
-
-  Widget _image() {
-    final provider = _provider;
-    if (provider == null) return _placeholder();
-    return Image(image: provider, fit: BoxFit.cover, width: double.infinity, errorBuilder: (_, __, ___) => _placeholder());
-  }
-
-  Widget _placeholder() => Container(color: const Color(0xffecece9), alignment: Alignment.center, child: const Text('🐈', style: TextStyle(fontSize: 52)));
 }
