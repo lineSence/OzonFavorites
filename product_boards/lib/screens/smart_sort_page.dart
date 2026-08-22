@@ -90,8 +90,6 @@ class _SmartSortPageState extends State<SmartSortPage> {
 
   void _reject(SmartSortResult result) {
     if (_busyIds.contains(result.item.id)) return;
-    // Deliberately do not assign a category. The item remains in the
-    // unparsed collection and disappears only from this Smart Sort session.
     setState(() => _results = _results.where((r) => r.item.id != result.item.id).toList(growable: false));
     _snack('Отклонено — товар остался в неразобранном');
   }
@@ -201,7 +199,7 @@ class _SmartSortPageState extends State<SmartSortPage> {
     return ListTile(
       title: Text(result.item.title, maxLines: 2, overflow: TextOverflow.ellipsis),
       subtitle: Text(
-        '${confidence}% • ${result.matchedKeywords.isEmpty ? 'Нет явных совпадений' : result.matchedKeywords.join(', ')}',
+        '$confidence% • ${result.matchedKeywords.isEmpty ? 'Нет явных совпадений' : result.matchedKeywords.join(', ')}',
       ),
       trailing: result.isConfident
           ? const Icon(Icons.check_circle_outline)
@@ -222,9 +220,7 @@ class _SmartSortPageState extends State<SmartSortPage> {
                     ),
                   ],
                 ),
-      leading: isReview
-          ? const Icon(Icons.help_outline)
-          : null,
+      leading: isReview ? const Icon(Icons.help_outline) : null,
     );
   }
 
