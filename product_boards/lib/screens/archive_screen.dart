@@ -25,6 +25,7 @@ class ArchiveScreen extends StatefulWidget {
 
 class _ArchiveScreenState extends State<ArchiveScreen> {
   static const _shareChannel = MethodChannel('product_boards/share');
+  static const _buildNumber = String.fromEnvironment('PINZON_BUILD_NUMBER', defaultValue: 'dev');
   final _normalizer = UrlNormalizer();
   List<ArchiveItem> _items = const [];
   List<Category> _categories = const [];
@@ -96,10 +97,7 @@ class _ArchiveScreenState extends State<ArchiveScreen> {
       final current = await widget.repository.getItems();
       ArchiveItem? item;
       for (final candidate in current) {
-        if (candidate.id == initialItem.id) {
-          item = candidate;
-          break;
-        }
+        if (candidate.id == initialItem.id) { item = candidate; break; }
       }
       if (item == null) return;
       final updated = screenshot == null
@@ -107,67 +105,39 @@ class _ArchiveScreenState extends State<ArchiveScreen> {
           : item.copyWith(imageUrl: screenshot, imageStatus: ImageStatus.success, updatedAt: DateTime.now());
       await widget.repository.upsertItem(updated);
       if (mounted) await _reload();
-    } catch (_) {
-      // Import itself has already succeeded. A screenshot failure must not
-      // delay the user or turn a successful import into an error.
-    }
+    } catch (_) {}
   }
 
   Future<bool> _addUrl(String raw, {String? initialTitle, String? initialImageUri}) async {
     final uri = Uri.tryParse(raw.trim());
-    if (uri == null || !{'http', 'https'}.contains(uri.scheme.toLowerCase())) {
-      _snack('Нужна ссылка http/https');
-      return false;
-    }
+    if (uri == null || !{'http', 'https'}.contains(uri.scheme.toLowerCase())) { _snack('Нужна ссылка http/https'); return false; }
     try {
       final duplicates = await widget.repository.findByNormalizedUrl(_normalizer.normalize(uri.toString()));
       if (duplicates.isNotEmpty && !await _confirmDuplicate(duplicates)) return false;
       final now = DateTime.now();
       final hasInitialImage = initialImageUri?.startsWith('file:') == true;
       final item = ArchiveItem(
-        id: widget.repository.newId(),
-        url: uri.toString(),
-        title: initialTitle?.isNotEmpty == true ? initialTitle! : '...',
-        titleSource: TitleSource.automatic,
-        imageUrl: hasInitialImage ? initialImageUri : null,
-        imageStatus: hasInitialImage ? ImageStatus.success : ImageStatus.loading,
-        note: '',
-        categoryId: _categoryId,
-        metadataStatus: MetadataStatus.loading,
-        createdAt: now,
-        updatedAt: now,
+        id: widget.repository.newId(), url: uri.toString(), title: initialTitle?.isNotEmpty == true ? initialTitle! : '...',
+        titleSource: TitleSource.automatic, imageUrl: hasInitialImage ? initialImageUri : null,
+        imageStatus: hasInitialImage ? ImageStatus.success : ImageStatus.loading, note: '', categoryId: _categoryId,
+        metadataStatus: MetadataStatus.loading, createdAt: now, updatedAt: now,
       );
       await widget.repository.upsertItem(item);
       await _reload();
       if (!hasInitialImage) unawaited(_resolveScreenshotInBackground(item));
       unawaited(widget.queue.enqueue(item));
       return true;
-    } catch (error) {
-      _snack('Не удалось добавить ссылку: $error');
-      return false;
-    }
+    } catch (error) { _snack('Не удалось добавить ссылку: $error'); return false; }
   }
 
   Future<bool> _confirmDuplicate(List<ArchiveItem> duplicates) async {
     final names = duplicates.map((item) => _categoryName(item.categoryId)).join('\n• ');
-    return await showDialog<bool>(
-          context: context,
-          builder: (_) => AlertDialog(
-            title: const Text('Эта ссылка уже есть'),
-            content: Text('• $names\n\nСоздать новый независимый объект?'),
-            actions: [
-              TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Отмена')),
-              FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Сохранить копию')),
-            ],
-          ),
-        ) ?? false;
+    return await showDialog<bool>(context: context, builder: (_) => AlertDialog(title: const Text('Эта ссылка уже есть'), content: Text('• $names\n\nСоздать новый независимый объект?'), actions: [TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Отмена')), FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Сохранить копию'))])) ?? false;
   }
 
   String _categoryName(String? id) {
     if (id == null) return 'Неразобранное';
-    for (final category in _categories) {
-      if (category.id == id) return '«${category.name}»';
-    }
+    for (final category in _categories) { if (category.id == id) return '«${category.name}»'; }
     return 'Подборка';
   }
 
@@ -185,28 +155,14 @@ class _ArchiveScreenState extends State<ArchiveScreen> {
 
   Future<void> _addDialog() async {
     final controller = TextEditingController();
-    final value = await showDialog<String>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Добавить ссылку'),
-        content: TextField(controller: controller, autofocus: true, keyboardType: TextInputType.url, decoration: const InputDecoration(hintText: 'Вставьте ссылку...')),
-        actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Отмена')), FilledButton(onPressed: () => Navigator.pop(context, controller.text), child: const Text('Добавить'))],
-      ),
-    );
+    final value = await showDialog<String>(context: context, builder: (_) => AlertDialog(title: const Text('Добавить ссылку'), content: TextField(controller: controller, autofocus: true, keyboardType: TextInputType.url, decoration: const InputDecoration(hintText: 'Вставьте ссылку...')), actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Отмена')), FilledButton(onPressed: () => Navigator.pop(context, controller.text), child: const Text('Добавить'))]));
     controller.dispose();
     if (value?.trim().isNotEmpty == true) await _addUrl(value!);
   }
 
   Future<void> _createCategory() async {
     final controller = TextEditingController();
-    final value = await showDialog<String>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Новая подборка'),
-        content: TextField(controller: controller, autofocus: true, decoration: const InputDecoration(labelText: 'Название')),
-        actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Отмена')), FilledButton(onPressed: () => Navigator.pop(context, controller.text), child: const Text('Создать'))],
-      ),
-    );
+    final value = await showDialog<String>(context: context, builder: (_) => AlertDialog(title: const Text('Новая подборка'), content: TextField(controller: controller, autofocus: true, decoration: const InputDecoration(labelText: 'Название')), actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Отмена')), FilledButton(onPressed: () => Navigator.pop(context, controller.text), child: const Text('Создать'))]));
     controller.dispose();
     final name = value?.trim() ?? '';
     if (name.isEmpty || await widget.repository.findCategoryByName(name) != null) return;
@@ -217,12 +173,7 @@ class _ArchiveScreenState extends State<ArchiveScreen> {
 
   Future<void> _moveSelected() async {
     if (_selected.isEmpty) return;
-    final target = await showModalBottomSheet<String>(context: context, showDragHandle: true, builder: (_) => SafeArea(child: Column(mainAxisSize: MainAxisSize.min, children: [
-      const ListTile(title: Text('Переместить', style: TextStyle(fontWeight: FontWeight.w800))),
-      ListTile(title: const Text('Неразобранное'), onTap: () => Navigator.pop(context, '__none__')),
-      ..._categories.map((c) => ListTile(title: Text(c.name), onTap: () => Navigator.pop(context, c.id))),
-      ListTile(leading: const Icon(Icons.add), title: const Text('Создать подборку'), onTap: () => Navigator.pop(context, '__create__')),
-    ])));
+    final target = await showModalBottomSheet<String>(context: context, showDragHandle: true, builder: (_) => SafeArea(child: Column(mainAxisSize: MainAxisSize.min, children: [const ListTile(title: Text('Переместить', style: TextStyle(fontWeight: FontWeight.w800))), ListTile(title: const Text('Неразобранное'), onTap: () => Navigator.pop(context, '__none__')), ..._categories.map((c) => ListTile(title: Text(c.name), onTap: () => Navigator.pop(context, c.id))), ListTile(leading: const Icon(Icons.add), title: const Text('Создать подборку'), onTap: () => Navigator.pop(context, '__create__'))])));
     if (target == '__create__') { await _createCategory(); return _moveSelected(); }
     if (target == null) return;
     await widget.repository.assignCategory(_selected, target == '__none__' ? null : target);
@@ -253,7 +204,12 @@ class _ArchiveScreenState extends State<ArchiveScreen> {
     return Scaffold(
       appBar: AppBar(
         leading: _selectionMode ? IconButton(onPressed: () => setState(() { _selectionMode = false; _selected.clear(); }), icon: const Icon(Icons.close)) : null,
-        title: _selectionMode ? Text('Выбрано: ${_selected.length}') : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [const Text('Мой архив', style: TextStyle(fontWeight: FontWeight.w900)), Text(title, style: Theme.of(context).textTheme.labelMedium)]),
+        title: _selectionMode
+            ? Text('Выбрано: ${_selected.length}')
+            : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(mainAxisSize: MainAxisSize.min, children: [const Text('Pinzon', style: TextStyle(fontWeight: FontWeight.w900)), const SizedBox(width: 7), Text('#$_buildNumber', style: Theme.of(context).textTheme.labelSmall)]),
+                Text(title, style: Theme.of(context).textTheme.labelMedium),
+              ]),
         actions: [if (!_selectionMode) ...[
           IconButton(tooltip: 'Умная сортировка', onPressed: _items.isEmpty ? null : _openSmartSort, icon: const Icon(Icons.auto_awesome)),
           IconButton(tooltip: 'Выбрать', onPressed: () => setState(() => _selectionMode = true), icon: const Icon(Icons.checklist_outlined)),
@@ -269,14 +225,7 @@ class _ArchiveScreenState extends State<ArchiveScreen> {
     );
   }
 
-  Widget _drawer() => Drawer(child: SafeArea(child: ListView(padding: const EdgeInsets.all(12), children: [
-    const Padding(padding: EdgeInsets.all(12), child: Text('Подборки', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900))),
-    ListTile(leading: const Icon(Icons.inbox_outlined), title: const Text('Неразобранное'), selected: _categoryId == null, onTap: () { Navigator.pop(context); setState(() => _categoryId = null); unawaited(_reload()); }),
-    const Divider(),
-    ..._categories.map((category) => ListTile(leading: const Icon(Icons.folder_outlined), title: Text(category.name), selected: _categoryId == category.id, onTap: () { Navigator.pop(context); setState(() => _categoryId = category.id); unawaited(_reload()); })),
-    const Divider(),
-    ListTile(leading: const Icon(Icons.add), title: const Text('Создать подборку'), onTap: () { Navigator.pop(context); unawaited(_createCategory()); }),
-  ])));
+  Widget _drawer() => Drawer(child: SafeArea(child: ListView(padding: const EdgeInsets.all(12), children: [const Padding(padding: EdgeInsets.all(12), child: Text('Подборки', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900))), ListTile(leading: const Icon(Icons.inbox_outlined), title: const Text('Неразобранное'), selected: _categoryId == null, onTap: () { Navigator.pop(context); setState(() => _categoryId = null); unawaited(_reload()); }), const Divider(), ..._categories.map((category) => ListTile(leading: const Icon(Icons.folder_outlined), title: Text(category.name), selected: _categoryId == category.id, onTap: () { Navigator.pop(context); setState(() => _categoryId = category.id); unawaited(_reload()); })), const Divider(), ListTile(leading: const Icon(Icons.add), title: const Text('Создать подборку'), onTap: () { Navigator.pop(context); unawaited(_createCategory()); })])));
 
   Widget _emptyBody(String title) => Center(child: Padding(padding: const EdgeInsets.all(32), child: Column(mainAxisSize: MainAxisSize.min, children: [const Text('🐈', style: TextStyle(fontSize: 60)), const SizedBox(height: 12), Text(title == 'Неразобранное' ? 'Неразобранное пусто' : 'В этой подборке пока нет ссылок', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900), textAlign: TextAlign.center), const SizedBox(height: 8), const Text('Сохраняйте ссылки через кнопку ниже или через Поделиться.', textAlign: TextAlign.center)])));
 
