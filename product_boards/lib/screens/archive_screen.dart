@@ -72,7 +72,8 @@ class _ArchiveScreenState extends State<ArchiveScreen> {
     final url = data?['url']?.toString().trim();
     if (url == null || url.isEmpty) return;
     final sharedImage = data?['imagePath']?.toString().trim();
-    if (await _addUrl(url, initialTitle: data?['title']?.toString().trim(), initialImageUri: sharedImage) && mounted) widget.onSharedDataConsumed();
+    final added = await _addUrl(url, initialTitle: data?['title']?.toString().trim(), initialImageUri: sharedImage);
+    if (added && mounted) widget.onSharedDataConsumed();
   }
 
   Future<String?> _resolveScreenshot(String url) async {
@@ -89,6 +90,30 @@ class _ArchiveScreenState extends State<ArchiveScreen> {
     }
   }
 
+  Future<void> _resolveScreenshotInBackground(ArchiveItem initialItem) async {
+    if (initialItem.imageUrl?.startsWith('file:') == true) return;
+    try {
+      final screenshot = await _resolveScreenshot(initialItem.url);
+      final current = await widget.repository.getItems();
+      ArchiveItem? item;
+      for (final candidate in current) {
+        if (candidate.id == initialItem.id) {
+          item = candidate;
+          break;
+        }
+      }
+      if (item == null) return;
+      final updated = screenshot == null
+          ? item.copyWith(imageUrl: null, imageStatus: ImageStatus.failed, updatedAt: DateTime.now())
+          : item.copyWith(imageUrl: screenshot, imageStatus: ImageStatus.success, updatedAt: DateTime.now());
+      await widget.repository.upsertItem(updated);
+      if (mounted) await _reload();
+    } catch (_) {
+      // Import itself has already succeeded. A screenshot failure must not
+      // delay the user or turn a successful import into an error.
+    }
+  }
+
   Future<bool> _addUrl(String raw, {String? initialTitle, String? initialImageUri}) async {
     final uri = Uri.tryParse(raw.trim());
     if (uri == null || !{'http', 'https'}.contains(uri.scheme.toLowerCase())) {
@@ -100,7 +125,7 @@ class _ArchiveScreenState extends State<ArchiveScreen> {
       if (duplicates.isNotEmpty && !await _confirmDuplicate(duplicates)) return false;
       final now = DateTime.now();
       final hasInitialImage = initialImageUri?.startsWith('file:') == true;
-      var item = ArchiveItem(
+      final item = ArchiveItem(
         id: widget.repository.newId(),
         url: uri.toString(),
         title: initialTitle?.isNotEmpty == true ? initialTitle! : '...',
@@ -116,21 +141,10 @@ class _ArchiveScreenState extends State<ArchiveScreen> {
       await widget.repository.upsertItem(item);
       await _reload();
 
-      // Marketplace image URLs are intentionally unsupported. Ask the Android
-      // WebView bridge to render the page and return its local screenshot.
-      if (!hasInitialImage) {
-        final screenshot = await _resolveScreenshot(uri.toString());
-        if (screenshot != null) {
-          item = item.copyWith(imageUrl: screenshot, imageStatus: ImageStatus.success, updatedAt: DateTime.now());
-        } else {
-          item = item.copyWith(imageUrl: null, imageStatus: ImageStatus.failed, updatedAt: DateTime.now());
-        }
-        await widget.repository.upsertItem(item);
-        await _reload();
-      }
-
+      // Import is intentionally non-blocking. The card is available immediately;
+      // screenshot and metadata enrichment continue in the background.
+      if (!hasInitialImage) unawaited(_resolveScreenshotInBackground(item));
       unawaited(widget.queue.enqueue(item));
-      if (mounted) await _openEditor(item);
       return true;
     } catch (error) {
       _snack('Не удалось добавить ссылку: $error');
