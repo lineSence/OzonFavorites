@@ -12,6 +12,7 @@ on:
 
 permissions:
   contents: read
+  actions: write
 
 env:
   FLUTTER_VERSION: '3.38.1'
@@ -109,50 +110,55 @@ jobs:
             printf '%s\n' 'storePassword=github-actions' 'keyPassword=github-actions' 'keyAlias=productboards' 'storeFile=release-keystore.jks' > key.properties
           fi
 
-      - name: Build release APK
-        working-directory: ${{ steps.project.outputs.project_dir }}
-        run: flutter build apk --release --dart-define=PINZON_BUILD_NUMBER=${PINZON_BUILD_NUMBER}
-
-      - name: Build split APKs
+      - name: Build ARM64 APK
         working-directory: ${{ steps.project.outputs.project_dir }}
         run: flutter build apk --release --split-per-abi --dart-define=PINZON_BUILD_NUMBER=${PINZON_BUILD_NUMBER}
 
-      - name: Build AAB
-        working-directory: ${{ steps.project.outputs.project_dir }}
-        run: flutter build appbundle --release --dart-define=PINZON_BUILD_NUMBER=${PINZON_BUILD_NUMBER}
-
-      - name: Rename release artifacts with build number
+      - name: Prepare ARM64 artifact
         working-directory: ${{ steps.project.outputs.project_dir }}
         shell: bash
         run: |
           set -euo pipefail
           APK_DIR="build/app/outputs/flutter-apk"
-          AAB_DIR="build/app/outputs/bundle/release"
-          mv "$APK_DIR/app-release.apk" "$APK_DIR/Pinzon-build-${PINZON_BUILD_NUMBER}.apk"
-          for apk in "$APK_DIR"/*-release.apk; do
-            [ -e "$apk" ] || continue
-            base="$(basename "$apk" -release.apk)"
-            mv "$apk" "$APK_DIR/Pinzon-build-${PINZON_BUILD_NUMBER}-${base}.apk"
-          done
-          mv "$AAB_DIR/app-release.aab" "$AAB_DIR/Pinzon-build-${PINZON_BUILD_NUMBER}.aab"
+          ARM64="$APK_DIR/app-arm64-v8a-release.apk"
+          test -s "$ARM64"
+          mv "$ARM64" "$APK_DIR/Pinzon-build-${PINZON_BUILD_NUMBER}-arm64-v8a.apk"
 
-      - name: Upload universal APK
+      - name: Remove old Pinzon artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEEP_ARTIFACTS: 5
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifacts_json="$(gh api --paginate \
+            -H 'Accept: application/vnd.github+json' \
+            "/repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100")"
+
+          echo "$artifacts_json" | python3 -c '
+          import json, os, subprocess, sys
+          data = json.load(sys.stdin)
+          artifacts = [
+              a for a in data.get("artifacts", [])
+              if a.get("name", "").startswith("pinzon-build-")
+          ]
+          artifacts.sort(key=lambda a: a.get("created_at", ""), reverse=True)
+          keep = int(os.environ.get("KEEP_ARTIFACTS", "5"))
+          for artifact in artifacts[keep:]:
+              aid = str(artifact["id"])
+              name = artifact.get("name", aid)
+              print(f"Deleting old artifact: {name} ({aid})")
+              subprocess.run([
+                  "gh", "api", "--method", "DELETE",
+                  "-H", "Accept: application/vnd.github+json",
+                  f"/repos/{os.environ["GITHUB_REPOSITORY"]}/actions/artifacts/{aid}"
+              ], check=True)
+          '
+
+      - name: Upload ARM64 APK
         uses: actions/upload-artifact@v4
         with:
-          name: pinzon-build-${{ github.run_number }}-apk
-          path: ${{ steps.project.outputs.project_dir }}/build/app/outputs/flutter-apk/Pinzon-build-${{ github.run_number }}.apk
+          name: pinzon-build-${{ github.run_number }}-arm64-v8a
+          path: ${{ steps.project.outputs.project_dir }}/build/app/outputs/flutter-apk/Pinzon-build-${{ github.run_number }}-arm64-v8a.apk
           if-no-files-found: error
-
-      - name: Upload split APKs
-        uses: actions/upload-artifact@v4
-        with:
-          name: pinzon-build-${{ github.run_number }}-split-apks
-          path: ${{ steps.project.outputs.project_dir }}/build/app/outputs/flutter-apk/Pinzon-build-${{ github.run_number }}-*.apk
-          if-no-files-found: error
-
-      - name: Upload AAB
-        uses: actions/upload-artifact@v4
-        with:
-          name: pinzon-build-${{ github.run_number }}-aab
-          path: ${{ steps.project.outputs.project_dir }}/build/app/outputs/bundle/release/Pinzon-build-${{ github.run_number }}.aab
-          if-no-files-found: error
+          retention-days: 7
