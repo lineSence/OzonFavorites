@@ -20,7 +20,7 @@ env:
   PINZON_BUILD_NUMBER: ${{ github.run_number }}
   YANDEX_DISK_BUILD_DIR: Pinzon/Builds
 
-a jobs:
+jobs:
   build:
     runs-on: ubuntu-latest
     steps:
