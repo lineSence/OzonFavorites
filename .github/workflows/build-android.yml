@@ -131,19 +131,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          artifacts_json="$(gh api --paginate \
-            -H 'Accept: application/vnd.github+json' \
-            "/repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100")"
+          artifacts_json="$(gh api --paginate -H 'Accept: application/vnd.github+json' "/repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100")"
 
           echo "$artifacts_json" | python3 -c '
           import json, os, subprocess, sys
           data = json.load(sys.stdin)
-          artifacts = [
-              a for a in data.get("artifacts", [])
-              if a.get("name", "").startswith("pinzon-build-")
-          ]
+          artifacts = [a for a in data.get("artifacts", []) if a.get("name", "").startswith("pinzon-build-")]
           artifacts.sort(key=lambda a: a.get("created_at", ""), reverse=True)
           keep = int(os.environ.get("KEEP_ARTIFACTS", "5"))
+          repo = os.environ["GITHUB_REPOSITORY"]
           for artifact in artifacts[keep:]:
               aid = str(artifact["id"])
               name = artifact.get("name", aid)
@@ -151,7 +147,7 @@ jobs:
               subprocess.run([
                   "gh", "api", "--method", "DELETE",
                   "-H", "Accept: application/vnd.github+json",
-                  f"/repos/{os.environ["GITHUB_REPOSITORY"]}/actions/artifacts/{aid}"
+                  f"/repos/{repo}/actions/artifacts/{aid}"
               ], check=True)
           '
 
