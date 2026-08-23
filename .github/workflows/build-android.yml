@@ -12,15 +12,15 @@ on:
 
 permissions:
   contents: read
-  actions: write
 
 env:
   FLUTTER_VERSION: '3.38.1'
   GRADLE_VERSION: '8.13'
   PUB_CACHE: ${{ github.workspace }}/.pub-cache
   PINZON_BUILD_NUMBER: ${{ github.run_number }}
+  YANDEX_DISK_BUILD_DIR: Pinzon/Builds
 
-jobs:
+a jobs:
   build:
     runs-on: ubuntu-latest
     steps:
@@ -114,7 +114,7 @@ jobs:
         working-directory: ${{ steps.project.outputs.project_dir }}
         run: flutter build apk --release --split-per-abi --dart-define=PINZON_BUILD_NUMBER=${PINZON_BUILD_NUMBER}
 
-      - name: Prepare ARM64 artifact
+      - name: Prepare ARM64 APK
         working-directory: ${{ steps.project.outputs.project_dir }}
         shell: bash
         run: |
@@ -124,27 +124,65 @@ jobs:
           test -s "$ARM64"
           mv "$ARM64" "$APK_DIR/Pinzon-build-${PINZON_BUILD_NUMBER}-arm64-v8a.apk"
 
-      - name: Remove old Pinzon artifacts
+      - name: Upload ARM64 APK to Yandex Disk
+        working-directory: ${{ steps.project.outputs.project_dir }}
         env:
-          GH_TOKEN: ${{ github.token }}
-          KEEP_ARTIFACTS: 5
+          YANDEX_DISK_TOKEN: ${{ secrets.YANDEX_DISK_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
-          gh api --paginate -H 'Accept: application/vnd.github+json' "/repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100" \
-            --jq '.artifacts[] | select(.name | startswith("pinzon-build-")) | [.id, .name, .created_at] | @tsv' \
-            | sort -k3,3r \
-            | tail -n +$((KEEP_ARTIFACTS + 1)) \
-            | while IFS=$'\t' read -r aid name created_at; do
-                [ -z "$aid" ] && continue
-                echo "Deleting old artifact: $name ($aid)"
-                gh api --method DELETE -H 'Accept: application/vnd.github+json' "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${aid}"
-              done
+          if [ -z "$YANDEX_DISK_TOKEN" ]; then
+            echo "YANDEX_DISK_TOKEN is not configured" >&2
+            exit 1
+          fi
 
-      - name: Upload ARM64 APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: pinzon-build-${{ github.run_number }}-arm64-v8a
-          path: ${{ steps.project.outputs.project_dir }}/build/app/outputs/flutter-apk/Pinzon-build-${{ github.run_number }}-arm64-v8a.apk
-          if-no-files-found: error
-          retention-days: 7
+          API="https://cloud-api.yandex.net/v1/disk"
+          APK="build/app/outputs/flutter-apk/Pinzon-build-${PINZON_BUILD_NUMBER}-arm64-v8a.apk"
+          VERSION_PATH="${YANDEX_DISK_BUILD_DIR}/Pinzon-build-${PINZON_BUILD_NUMBER}-arm64-v8a.apk"
+          LATEST_PATH="${YANDEX_DISK_BUILD_DIR}/Pinzon-latest-arm64-v8a.apk"
+
+          curl -fsS -X PUT -H "Authorization: OAuth ${YANDEX_DISK_TOKEN}" \
+            --data-urlencode "path=${YANDEX_DISK_BUILD_DIR}" \
+            "${API}/resources" >/dev/null
+
+          upload_file() {
+            local path="$1"
+            local encoded_path
+            encoded_path="$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=""))' "$path")"
+            local href
+            href="$(curl -fsS -H "Authorization: OAuth ${YANDEX_DISK_TOKEN}" \
+              "${API}/resources/upload?path=${encoded_path}&overwrite=true" | python3 -c 'import json,sys; print(json.load(sys.stdin)["href"])')"
+            curl -fsS -T "$APK" "$href" >/dev/null
+          }
+
+          upload_file "$VERSION_PATH"
+          upload_file "$LATEST_PATH"
+
+          publish() {
+            local path="$1"
+            local encoded_path
+            encoded_path="$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=""))' "$path")"
+            curl -fsS -X PUT -H "Authorization: OAuth ${YANDEX_DISK_TOKEN}" \
+              "${API}/resources/publish?path=${encoded_path}" >/dev/null || true
+            curl -fsS -H "Authorization: OAuth ${YANDEX_DISK_TOKEN}" \
+              "${API}/resources?path=${encoded_path}&fields=public_url" \
+              | python3 -c 'import json,sys; print(json.load(sys.stdin).get("public_url", ""))'
+          }
+
+          VERSION_URL="$(publish "$VERSION_PATH")"
+          LATEST_URL="$(publish "$LATEST_PATH")"
+
+          echo "VERSION_URL=$VERSION_URL" >> "$GITHUB_ENV"
+          echo "LATEST_URL=$LATEST_URL" >> "$GITHUB_ENV"
+
+      - name: Build summary
+        shell: bash
+        run: |
+          {
+            echo "## 🚀 Pinzon build #${PINZON_BUILD_NUMBER}"
+            echo
+            echo "**APK:** \`Pinzon-build-${PINZON_BUILD_NUMBER}-arm64-v8a.apk\`"
+            echo
+            if [ -n "${VERSION_URL:-}" ]; then echo "[Скачать этот билд](${VERSION_URL})"; fi
+            if [ -n "${LATEST_URL:-}" ]; then echo "[Скачать последний билд](${LATEST_URL})"; fi
+          } >> "$GITHUB_STEP_SUMMARY"
