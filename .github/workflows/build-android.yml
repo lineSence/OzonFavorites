@@ -125,6 +125,7 @@ jobs:
           mv "$ARM64" "$APK_DIR/Pinzon-build-${PINZON_BUILD_NUMBER}-arm64-v8a.apk"
 
       - name: Upload ARM64 APK to Yandex Disk
+        if: github.event_name != 'pull_request'
         working-directory: ${{ steps.project.outputs.project_dir }}
         env:
           YANDEX_DISK_TOKEN: ${{ secrets.YANDEX_DISK_TOKEN }}
@@ -143,7 +144,7 @@ jobs:
 
           curl -fsS -X PUT -H "Authorization: OAuth ${YANDEX_DISK_TOKEN}" \
             --data-urlencode "path=${YANDEX_DISK_BUILD_DIR}" \
-            "${API}/resources" >/dev/null
+            "${API}/resources" >/dev/null || true
 
           upload_file() {
             local path="$1"
@@ -182,7 +183,12 @@ jobs:
             echo "## 🚀 Pinzon build #${PINZON_BUILD_NUMBER}"
             echo
             echo "**APK:** \`Pinzon-build-${PINZON_BUILD_NUMBER}-arm64-v8a.apk\`"
-            echo
-            if [ -n "${VERSION_URL:-}" ]; then echo "[Скачать этот билд](${VERSION_URL})"; fi
-            if [ -n "${LATEST_URL:-}" ]; then echo "[Скачать последний билд](${LATEST_URL})"; fi
+            if [ "${{ github.event_name }}" = "pull_request" ]; then
+              echo
+              echo "PR build: APK is built for testing, but is not uploaded to Yandex Disk because repository secrets are unavailable to fork PRs."
+            else
+              echo
+              if [ -n "${VERSION_URL:-}" ]; then echo "[Скачать этот билд](${VERSION_URL})"; fi
+              if [ -n "${LATEST_URL:-}" ]; then echo "[Скачать последний билд](${LATEST_URL})"; fi
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
