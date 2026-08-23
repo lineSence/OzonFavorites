@@ -131,25 +131,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          artifacts_json="$(gh api --paginate -H 'Accept: application/vnd.github+json' "/repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100")"
-
-          echo "$artifacts_json" | python3 -c '
-          import json, os, subprocess, sys
-          data = json.load(sys.stdin)
-          artifacts = [a for a in data.get("artifacts", []) if a.get("name", "").startswith("pinzon-build-")]
-          artifacts.sort(key=lambda a: a.get("created_at", ""), reverse=True)
-          keep = int(os.environ.get("KEEP_ARTIFACTS", "5"))
-          repo = os.environ["GITHUB_REPOSITORY"]
-          for artifact in artifacts[keep:]:
-              aid = str(artifact["id"])
-              name = artifact.get("name", aid)
-              print(f"Deleting old artifact: {name} ({aid})")
-              subprocess.run([
-                  "gh", "api", "--method", "DELETE",
-                  "-H", "Accept: application/vnd.github+json",
-                  f"/repos/{repo}/actions/artifacts/{aid}"
-              ], check=True)
-          '
+          gh api --paginate -H 'Accept: application/vnd.github+json' "/repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100" \
+            --jq '.artifacts[] | select(.name | startswith("pinzon-build-")) | [.id, .name, .created_at] | @tsv' \
+            | sort -k3,3r \
+            | tail -n +$((KEEP_ARTIFACTS + 1)) \
+            | while IFS=$'\t' read -r aid name created_at; do
+                [ -z "$aid" ] && continue
+                echo "Deleting old artifact: $name ($aid)"
+                gh api --method DELETE -H 'Accept: application/vnd.github+json' "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${aid}"
+              done
 
       - name: Upload ARM64 APK
         uses: actions/upload-artifact@v4
