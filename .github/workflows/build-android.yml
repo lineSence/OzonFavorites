@@ -1,4 +1,4 @@
-name: Build Android
+name: Build Pinzon Android
 
 on:
   workflow_dispatch:
@@ -18,10 +18,10 @@ env:
   GRADLE_VERSION: '8.13'
   PUB_CACHE: ${{ github.workspace }}/.pub-cache
   PINZON_BUILD_NUMBER: ${{ github.run_number }}
-  YANDEX_DISK_BUILD_DIR: Pinzon/Builds
 
 jobs:
   build:
+    name: Build, test and package Pinzon
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -33,10 +33,10 @@ jobs:
         run: |
           set -euo pipefail
           PUBSPEC_PATH="$(find . -name pubspec.yaml -not -path '*/.dart_tool/*' -print -quit)"
-          if [ -z "$PUBSPEC_PATH" ]; then exit 1; fi
+          test -n "$PUBSPEC_PATH"
           PROJECT_DIR="$(dirname "$PUBSPEC_PATH")"
           PROJECT_DIR="${PROJECT_DIR#./}"
-          if [ "$PROJECT_DIR" = "." ]; then PROJECT_DIR=""; fi
+          [ "$PROJECT_DIR" = "." ] && PROJECT_DIR=""
           echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
 
       - name: Set up Flutter
@@ -52,14 +52,6 @@ jobs:
       - name: Get dependencies
         working-directory: ${{ steps.project.outputs.project_dir }}
         run: flutter pub get
-
-      - name: Validate native assets
-        working-directory: ${{ steps.project.outputs.project_dir }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          flutter pub cache repair
-          flutter pub get
 
       - name: Analyze
         working-directory: ${{ steps.project.outputs.project_dir }}
@@ -81,7 +73,6 @@ jobs:
           FLUTTER_ROOT: ${{ env.FLUTTER_ROOT }}
         run: |
           set -euo pipefail
-          mkdir -p "$HOME/.gradle"
           cat > local.properties <<EOF
           flutter.sdk=${FLUTTER_ROOT}
           sdk.dir=${ANDROID_SDK_ROOT}
@@ -103,92 +94,63 @@ jobs:
           mkdir -p app
           if [ -n "${ANDROID_KEYSTORE_BASE64}" ]; then
             echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > app/release-keystore.jks
-            test -s app/release-keystore.jks
             printf '%s\n' "storePassword=${ANDROID_KEYSTORE_PASSWORD}" "keyPassword=${ANDROID_KEY_PASSWORD}" "keyAlias=${ANDROID_KEY_ALIAS}" 'storeFile=release-keystore.jks' > key.properties
           else
-            keytool -genkeypair -v -keystore app/release-keystore.jks -storepass github-actions -keypass github-actions -alias productboards -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Pinzon, OU=Build, O=Pinzon, L=Amsterdam, ST=NH, C=NL"
-            printf '%s\n' 'storePassword=github-actions' 'keyPassword=github-actions' 'keyAlias=productboards' 'storeFile=release-keystore.jks' > key.properties
+            keytool -genkeypair -v -keystore app/release-keystore.jks -storepass github-actions -keypass github-actions -alias pinzon -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Pinzon, OU=Build, O=Pinzon, L=Amsterdam, ST=NH, C=NL"
+            printf '%s\n' 'storePassword=github-actions' 'keyPassword=github-actions' 'keyAlias=pinzon' 'storeFile=release-keystore.jks' > key.properties
           fi
 
-      - name: Build ARM64 APK
+      - name: Build universal release APK
+        working-directory: ${{ steps.project.outputs.project_dir }}
+        run: flutter build apk --release --dart-define=PINZON_BUILD_NUMBER=${PINZON_BUILD_NUMBER}
+
+      - name: Build split release APKs
         working-directory: ${{ steps.project.outputs.project_dir }}
         run: flutter build apk --release --split-per-abi --dart-define=PINZON_BUILD_NUMBER=${PINZON_BUILD_NUMBER}
 
-      - name: Prepare ARM64 APK
+      - name: Build release AAB
+        working-directory: ${{ steps.project.outputs.project_dir }}
+        run: flutter build appbundle --release --dart-define=PINZON_BUILD_NUMBER=${PINZON_BUILD_NUMBER}
+
+      - name: Rename artifacts
         working-directory: ${{ steps.project.outputs.project_dir }}
         shell: bash
         run: |
           set -euo pipefail
           APK_DIR="build/app/outputs/flutter-apk"
-          ARM64="$APK_DIR/app-arm64-v8a-release.apk"
-          test -s "$ARM64"
-          mv "$ARM64" "$APK_DIR/Pinzon-build-${PINZON_BUILD_NUMBER}-arm64-v8a.apk"
+          AAB_DIR="build/app/outputs/bundle/release"
+          mv "$APK_DIR/app-release.apk" "$APK_DIR/Pinzon-build-${PINZON_BUILD_NUMBER}-universal.apk"
+          for abi in arm64-v8a armeabi-v7a x86_64; do
+            file="$APK_DIR/app-${abi}-release.apk"
+            if [ -f "$file" ]; then mv "$file" "$APK_DIR/Pinzon-build-${PINZON_BUILD_NUMBER}-${abi}.apk"; fi
+          done
+          mv "$AAB_DIR/app-release.aab" "$AAB_DIR/Pinzon-build-${PINZON_BUILD_NUMBER}.aab"
 
-      - name: Upload ARM64 APK to Yandex Disk
-        if: github.event_name != 'pull_request'
-        working-directory: ${{ steps.project.outputs.project_dir }}
-        env:
-          YANDEX_DISK_TOKEN: ${{ secrets.YANDEX_DISK_TOKEN }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ -z "$YANDEX_DISK_TOKEN" ]; then
-            echo "YANDEX_DISK_TOKEN is not configured" >&2
-            exit 1
-          fi
+      - name: Upload APK artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Pinzon-build-${{ env.PINZON_BUILD_NUMBER }}-apk
+          path: ${{ steps.project.outputs.project_dir }}/build/app/outputs/flutter-apk/*.apk
+          if-no-files-found: error
+          retention-days: 30
 
-          API="https://cloud-api.yandex.net/v1/disk"
-          APK="build/app/outputs/flutter-apk/Pinzon-build-${PINZON_BUILD_NUMBER}-arm64-v8a.apk"
-          VERSION_PATH="${YANDEX_DISK_BUILD_DIR}/Pinzon-build-${PINZON_BUILD_NUMBER}-arm64-v8a.apk"
-          LATEST_PATH="${YANDEX_DISK_BUILD_DIR}/Pinzon-latest-arm64-v8a.apk"
-
-          curl -fsS -X PUT -H "Authorization: OAuth ${YANDEX_DISK_TOKEN}" \
-            --data-urlencode "path=${YANDEX_DISK_BUILD_DIR}" \
-            "${API}/resources" >/dev/null || true
-
-          upload_file() {
-            local path="$1"
-            local encoded_path
-            encoded_path="$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=""))' "$path")"
-            local href
-            href="$(curl -fsS -H "Authorization: OAuth ${YANDEX_DISK_TOKEN}" \
-              "${API}/resources/upload?path=${encoded_path}&overwrite=true" | python3 -c 'import json,sys; print(json.load(sys.stdin)["href"])')"
-            curl -fsS -T "$APK" "$href" >/dev/null
-          }
-
-          upload_file "$VERSION_PATH"
-          upload_file "$LATEST_PATH"
-
-          publish() {
-            local path="$1"
-            local encoded_path
-            encoded_path="$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=""))' "$path")"
-            curl -fsS -X PUT -H "Authorization: OAuth ${YANDEX_DISK_TOKEN}" \
-              "${API}/resources/publish?path=${encoded_path}" >/dev/null || true
-            curl -fsS -H "Authorization: OAuth ${YANDEX_DISK_TOKEN}" \
-              "${API}/resources?path=${encoded_path}&fields=public_url" \
-              | python3 -c 'import json,sys; print(json.load(sys.stdin).get("public_url", ""))'
-          }
-
-          VERSION_URL="$(publish "$VERSION_PATH")"
-          LATEST_URL="$(publish "$LATEST_PATH")"
-
-          echo "VERSION_URL=$VERSION_URL" >> "$GITHUB_ENV"
-          echo "LATEST_URL=$LATEST_URL" >> "$GITHUB_ENV"
+      - name: Upload AAB artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Pinzon-build-${{ env.PINZON_BUILD_NUMBER }}-aab
+          path: ${{ steps.project.outputs.project_dir }}/build/app/outputs/bundle/release/*.aab
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Build summary
         shell: bash
         run: |
           {
-            echo "## 🚀 Pinzon build #${PINZON_BUILD_NUMBER}"
+            echo "## Pinzon build #${PINZON_BUILD_NUMBER}"
             echo
-            echo "**APK:** \`Pinzon-build-${PINZON_BUILD_NUMBER}-arm64-v8a.apk\`"
-            if [ "${{ github.event_name }}" = "pull_request" ]; then
-              echo
-              echo "PR build: APK is built for testing, but is not uploaded to Yandex Disk because repository secrets are unavailable to fork PRs."
-            else
-              echo
-              if [ -n "${VERSION_URL:-}" ]; then echo "[Скачать этот билд](${VERSION_URL})"; fi
-              if [ -n "${LATEST_URL:-}" ]; then echo "[Скачать последний билд](${LATEST_URL})"; fi
-            fi
+            echo "Artifacts are stored in GitHub Actions."
+            echo
+            echo "- Universal APK: Pinzon-build-${PINZON_BUILD_NUMBER}-universal.apk"
+            echo "- Split APKs: arm64-v8a / armeabi-v7a / x86_64"
+            echo "- AAB: Pinzon-build-${PINZON_BUILD_NUMBER}.aab"
           } >> "$GITHUB_STEP_SUMMARY"
