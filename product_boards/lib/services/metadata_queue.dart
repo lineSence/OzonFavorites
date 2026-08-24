@@ -50,11 +50,10 @@ class MetadataQueue {
       try {
         final result = await service.fetch(Uri.parse(initial.url));
         final titleOk = result.title?.trim().isNotEmpty == true;
-        final classificationInput = [
-          if (titleOk) result.title!,
-          if (result.description?.trim().isNotEmpty == true) result.description!,
-        ].join(' ');
-        final classification = classifier.classify(classificationInput.isEmpty ? initial.title : classificationInput);
+        final classificationInput = titleOk ? result.title!.trim() : initial.title.trim();
+        final classification = classifier.classify(
+          classificationInput.isEmpty ? initial.title : classificationInput,
+        );
 
         final next = initial.copyWith(
           title: initial.titleSource == TitleSource.manual ? initial.title : (titleOk ? result.title! : initial.title),
