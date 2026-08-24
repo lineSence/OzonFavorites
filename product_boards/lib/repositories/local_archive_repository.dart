@@ -44,7 +44,6 @@ class LocalArchiveRepository implements ArchiveRepository {
     final rows = await db.rawQuery("SELECT name FROM sqlite_master WHERE type='table'");
     final names = rows.map((r) => r['name']?.toString()).toSet();
     if (!names.contains('products')) return;
-
     final categoryMap = <String, String>{};
     if (names.contains('boards')) {
       for (final row in await db.query('boards')) {
@@ -63,7 +62,6 @@ class LocalArchiveRepository implements ArchiveRepository {
         } catch (_) {}
       }
     }
-
     for (final row in await db.query('products')) {
       try {
         final raw = Map<String, dynamic>.from(jsonDecode(row['data']! as String) as Map);
@@ -99,9 +97,7 @@ class LocalArchiveRepository implements ArchiveRepository {
     final rows = await db.query('categories');
     for (final row in rows) {
       final category = Category.fromJson(jsonDecode(row['data']! as String) as Map<String, dynamic>);
-      if (category.name.trim().toLowerCase() == key) {
-        return category;
-      }
+      if (category.name.trim().toLowerCase() == key) return category;
     }
     return null;
   }
@@ -113,10 +109,13 @@ class LocalArchiveRepository implements ArchiveRepository {
 
   @override
   Future<List<ArchiveItem>> getItems({String? categoryId}) async {
-    final rows = await _database.query('archive_items');
-    final items = rows.map((row) => ArchiveItem.fromJson(jsonDecode(row['data']! as String) as Map<String, dynamic>)).where((item) => item.categoryId == categoryId).toList();
-    items.sort((a, b) => b.createdAt.compareTo(a.createdAt));
-    return items;
+    final rows = await _database.query(
+      'archive_items',
+      where: categoryId == null ? 'json_extract(data, \'$.categoryId\') IS NULL' : 'json_extract(data, \'$.categoryId\') = ?',
+      whereArgs: categoryId == null ? null : [categoryId],
+      orderBy: 'json_extract(data, \'$.createdAt\') DESC',
+    );
+    return rows.map((row) => ArchiveItem.fromJson(jsonDecode(row['data']! as String) as Map<String, dynamic>)).toList();
   }
 
   @override
@@ -140,9 +139,7 @@ class LocalArchiveRepository implements ArchiveRepository {
   @override
   Future<void> deleteItems(Iterable<String> ids) async {
     await _database.transaction((txn) async {
-      for (final id in ids) {
-        await txn.delete('archive_items', where: 'id = ?', whereArgs: [id]);
-      }
+      for (final id in ids) await txn.delete('archive_items', where: 'id = ?', whereArgs: [id]);
     });
   }
 
@@ -198,8 +195,6 @@ class LocalArchiveRepository implements ArchiveRepository {
   Future<void> close() async {
     final db = _db;
     _db = null;
-    if (db != null) {
-      await db.close();
-    }
+    if (db != null) await db.close();
   }
 }
