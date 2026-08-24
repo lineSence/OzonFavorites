@@ -3,16 +3,18 @@ import 'dart:async';
 import '../models/archive_item.dart';
 import '../repositories/archive_repository.dart';
 import 'metadata_service.dart';
+import 'product_classifier.dart';
 
-/// Background queue for text metadata only.
-///
-/// Images are produced exclusively by the Android WebView screenshot pipeline
-/// and must never be populated or replaced by this queue.
+/// Background queue for text metadata and deterministic smart sorting.
+/// Images are produced exclusively by the Android WebView screenshot pipeline.
 class MetadataQueue {
-  MetadataQueue({required this.repository, MetadataService? service}) : service = service ?? MetadataService();
+  MetadataQueue({required this.repository, MetadataService? service, ProductClassifier? classifier})
+      : service = service ?? MetadataService(),
+        classifier = classifier ?? ProductClassifier();
 
   final ArchiveRepository repository;
   final MetadataService service;
+  final ProductClassifier classifier;
   final Map<String, Future<void>> _running = {};
 
   static const _delays = <Duration>[
@@ -48,14 +50,29 @@ class MetadataQueue {
       try {
         final result = await service.fetch(Uri.parse(initial.url));
         final titleOk = result.title?.trim().isNotEmpty == true;
+        final classificationInput = [
+          if (titleOk) result.title!,
+          if (result.description?.trim().isNotEmpty == true) result.description!,
+        ].join(' ');
+        final classification = classifier.classify(classificationInput.isEmpty ? initial.title : classificationInput);
+
         final next = initial.copyWith(
           title: initial.titleSource == TitleSource.manual ? initial.title : (titleOk ? result.title! : initial.title),
-          // Deliberately preserve the existing screenshot-derived image fields.
+          // Preserve screenshot-derived image fields.
           imageUrl: initial.imageUrl,
           imageStatus: initial.imageStatus,
+          // Do not overwrite an explicit/manual board assignment.
+          categoryId: initial.categoryId ?? classification.categoryId,
           metadataStatus: titleOk ? MetadataStatus.success : MetadataStatus.partial,
           updatedAt: DateTime.now(),
         );
+
+        // Classification is intentionally observable in diagnostics before we
+        // introduce additional persistent fields to ArchiveItem.
+        // This keeps the current storage schema backwards compatible.
+        // ignore: avoid_print
+        print('[PinzonClassifier] category=${classification.categoryId} confidence=${classification.confidence.toStringAsFixed(2)} brand=${classification.brand} type=${classification.productType} model=${classification.model} color=${classification.color} size=${classification.size} material=${classification.material} quantity=${classification.quantity}');
+
         await repository.upsertItem(next);
         return;
       } on PermanentMetadataException {
@@ -73,7 +90,6 @@ class MetadataQueue {
     if (lastError) {
       final failed = initial.copyWith(
         title: initial.titleSource == TitleSource.manual ? initial.title : initial.title.isEmpty ? 'Без названия' : initial.title,
-        // Never mark a screenshot as failed merely because text metadata failed.
         imageUrl: initial.imageUrl,
         imageStatus: initial.imageStatus,
         metadataStatus: MetadataStatus.failed,
