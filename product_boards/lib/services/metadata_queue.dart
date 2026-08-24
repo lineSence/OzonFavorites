@@ -57,11 +57,12 @@ class MetadataQueue {
 
         final next = initial.copyWith(
           title: initial.titleSource == TitleSource.manual ? initial.title : (titleOk ? result.title! : initial.title),
-          // Preserve screenshot-derived image fields.
+          // Metadata processing must never replace or clear screenshot-derived image fields.
           imageUrl: initial.imageUrl,
           imageStatus: initial.imageStatus,
-          // Do not overwrite an explicit/manual board assignment.
-          categoryId: initial.categoryId ?? classification.categoryId,
+          // Classification is analysis only. The item remains in Unprocessed
+          // until the user explicitly sends it through Smart Sorting.
+          categoryId: initial.categoryId,
           metadataStatus: titleOk ? MetadataStatus.success : MetadataStatus.partial,
           updatedAt: DateTime.now(),
         );
