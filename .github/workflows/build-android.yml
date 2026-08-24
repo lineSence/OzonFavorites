@@ -23,6 +23,9 @@ jobs:
   build:
     name: Build, test and package Pinzon
     runs-on: ubuntu-latest
+    concurrency:
+      group: pinzon-${{ github.workflow }}-${{ github.ref }}
+      cancel-in-progress: true
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -100,45 +103,22 @@ jobs:
             printf '%s\n' 'storePassword=github-actions' 'keyPassword=github-actions' 'keyAlias=pinzon' 'storeFile=release-keystore.jks' > key.properties
           fi
 
-      - name: Build universal release APK
+      - name: Build optimized universal APK
         working-directory: ${{ steps.project.outputs.project_dir }}
         run: flutter build apk --release --dart-define=PINZON_BUILD_NUMBER=${PINZON_BUILD_NUMBER}
 
-      - name: Build split release APKs
-        working-directory: ${{ steps.project.outputs.project_dir }}
-        run: flutter build apk --release --split-per-abi --dart-define=PINZON_BUILD_NUMBER=${PINZON_BUILD_NUMBER}
-
-      - name: Build release AAB
-        working-directory: ${{ steps.project.outputs.project_dir }}
-        run: flutter build appbundle --release --dart-define=PINZON_BUILD_NUMBER=${PINZON_BUILD_NUMBER}
-
-      - name: Rename artifacts
+      - name: Rename APK
         working-directory: ${{ steps.project.outputs.project_dir }}
         shell: bash
         run: |
           set -euo pipefail
-          APK_DIR="build/app/outputs/flutter-apk"
-          AAB_DIR="build/app/outputs/bundle/release"
-          mv "$APK_DIR/app-release.apk" "$APK_DIR/Pinzon-build-${PINZON_BUILD_NUMBER}-universal.apk"
-          for abi in arm64-v8a armeabi-v7a x86_64; do
-            file="$APK_DIR/app-${abi}-release.apk"
-            if [ -f "$file" ]; then mv "$file" "$APK_DIR/Pinzon-build-${PINZON_BUILD_NUMBER}-${abi}.apk"; fi
-          done
-          mv "$AAB_DIR/app-release.aab" "$AAB_DIR/Pinzon-build-${PINZON_BUILD_NUMBER}.aab"
+          mv build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/Pinzon-build-${PINZON_BUILD_NUMBER}.apk
 
-      - name: Upload APK artifacts
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Pinzon-build-${{ env.PINZON_BUILD_NUMBER }}-apk
-          path: ${{ steps.project.outputs.project_dir }}/build/app/outputs/flutter-apk/*.apk
-          if-no-files-found: error
-          retention-days: 30
-
-      - name: Upload AAB artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: Pinzon-build-${{ env.PINZON_BUILD_NUMBER }}-aab
-          path: ${{ steps.project.outputs.project_dir }}/build/app/outputs/bundle/release/*.aab
+          name: Pinzon-build-${{ env.PINZON_BUILD_NUMBER }}
+          path: ${{ steps.project.outputs.project_dir }}/build/app/outputs/flutter-apk/Pinzon-build-${{ env.PINZON_BUILD_NUMBER }}.apk
           if-no-files-found: error
           retention-days: 30
 
@@ -148,9 +128,7 @@ jobs:
           {
             echo "## Pinzon build #${PINZON_BUILD_NUMBER}"
             echo
-            echo "Artifacts are stored in GitHub Actions."
+            echo "Single optimized universal APK only."
             echo
-            echo "- Universal APK: Pinzon-build-${PINZON_BUILD_NUMBER}-universal.apk"
-            echo "- Split APKs: arm64-v8a / armeabi-v7a / x86_64"
-            echo "- AAB: Pinzon-build-${PINZON_BUILD_NUMBER}.aab"
+            echo "Artifact: Pinzon-build-${PINZON_BUILD_NUMBER}.apk"
           } >> "$GITHUB_STEP_SUMMARY"
