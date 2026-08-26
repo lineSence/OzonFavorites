@@ -8,6 +8,7 @@ on:
       - main
       - master
       - fix/android-gradle-compat
+      - feature/update-safe-storage
 
 permissions:
   contents: read
@@ -36,9 +37,7 @@ jobs:
           fi
           PROJECT_DIR="$(dirname "$PUBSPEC_PATH")"
           PROJECT_DIR="${PROJECT_DIR#./}"
-          if [ "$PROJECT_DIR" = "." ]; then
-            PROJECT_DIR=""
-          fi
+          if [ "$PROJECT_DIR" = "." ]; then PROJECT_DIR=""; fi
           echo "Detected Flutter project: ${PROJECT_DIR:-.}"
           echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
 
@@ -84,14 +83,7 @@ jobs:
           rm -f gradle/wrapper/gradle-wrapper.jar
           gradle wrapper --gradle-version "${GRADLE_VERSION}" --distribution-type all
           test -s gradle/wrapper/gradle-wrapper.jar
-          echo "Generated Gradle Wrapper:"
-          ls -lh gradle/wrapper/gradle-wrapper.jar
 
-      # Если в репозитории заданы секреты с постоянным keystore,
-      # сборка подписывается им (можно публиковать в Google Play и
-      # обновлять приложение поверх предыдущих артефактов).
-      # Иначе генерируется одноразовый ключ: APK устанавливается,
-      # но такой AAB нельзя публиковать в Play.
       - name: Configure release signing
         working-directory: ${{ steps.project.outputs.project_dir }}/android
         shell: bash
@@ -102,36 +94,20 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          mkdir -p app
-          if [ -n "${ANDROID_KEYSTORE_BASE64}" ]; then
-            echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > app/release-keystore.jks
-            test -s app/release-keystore.jks
-            printf '%s\n' \
-              "storePassword=${ANDROID_KEYSTORE_PASSWORD}" \
-              "keyPassword=${ANDROID_KEY_PASSWORD}" \
-              "keyAlias=${ANDROID_KEY_ALIAS}" \
-              'storeFile=release-keystore.jks' \
-              > key.properties
-            echo "Using permanent release keystore from secrets."
-          else
-            keytool -genkeypair -v \
-              -keystore app/release-keystore.jks \
-              -storepass github-actions \
-              -keypass github-actions \
-              -alias productboards \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 10000 \
-              -dname "CN=Product Boards, OU=Build, O=Product Boards, L=Amsterdam, ST=NH, C=NL"
-            printf '%s\n' \
-              'storePassword=github-actions' \
-              'keyPassword=github-actions' \
-              'keyAlias=productboards' \
-              'storeFile=release-keystore.jks' \
-              > key.properties
-            echo "No ANDROID_KEYSTORE_BASE64 secret; using throwaway CI keystore (installable APK only)."
+          if [ -z "${ANDROID_KEYSTORE_BASE64}" ] || [ -z "${ANDROID_KEYSTORE_PASSWORD}" ] || [ -z "${ANDROID_KEY_ALIAS}" ] || [ -z "${ANDROID_KEY_PASSWORD}" ]; then
+            echo "ERROR: A permanent release keystore is required for an update-safe build."
+            echo "Set ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS and ANDROID_KEY_PASSWORD in GitHub Actions secrets."
+            exit 1
           fi
-          ls -lh app/release-keystore.jks key.properties
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > app/release-keystore.jks
+          test -s app/release-keystore.jks
+          printf '%s\n' \
+            "storePassword=${ANDROID_KEYSTORE_PASSWORD}" \
+            "keyPassword=${ANDROID_KEY_PASSWORD}" \
+            "keyAlias=${ANDROID_KEY_ALIAS}" \
+            'storeFile=release-keystore.jks' \
+            > key.properties
+          echo "Using permanent release keystore."
 
       - name: Build release APK
         working-directory: ${{ steps.project.outputs.project_dir }}
@@ -148,20 +124,20 @@ jobs:
       - name: Upload universal APK
         uses: actions/upload-artifact@v4
         with:
-          name: product-boards-apk
+          name: pinzon-update-apk
           path: ${{ steps.project.outputs.project_dir }}/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
 
       - name: Upload split APKs
         uses: actions/upload-artifact@v4
         with:
-          name: product-boards-split-apks
+          name: pinzon-update-split-apks
           path: ${{ steps.project.outputs.project_dir }}/build/app/outputs/flutter-apk/*-release.apk
           if-no-files-found: error
 
       - name: Upload AAB
         uses: actions/upload-artifact@v4
         with:
-          name: product-boards-aab
+          name: pinzon-update-aab
           path: ${{ steps.project.outputs.project_dir }}/build/app/outputs/bundle/release/app-release.aab
           if-no-files-found: error
