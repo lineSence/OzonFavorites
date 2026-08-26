@@ -1,7 +1,7 @@
 name: pinzon
 description: Visual archive of links for fast saving and later organization.
 publish_to: 'none'
-version: 0.1.0+1
+version: 0.1.1+2
 
 environment:
   sdk: '>=3.10.0 <4.0.0'
