@@ -12,7 +12,8 @@ import 'archive_repository.dart';
 
 class LocalArchiveRepository implements ArchiveRepository {
   static const _dbName = 'product_boards.sqlite';
-  static const _version = 3;
+  // Database schema versions are permanent. Never reuse or decrease a version.
+  static const _version = 4;
   final Uuid _uuid = const Uuid();
   final UrlNormalizer normalizer;
   Database? _db;
@@ -22,19 +23,40 @@ class LocalArchiveRepository implements ArchiveRepository {
   @override
   Future<void> init() async {
     final path = p.join((await getApplicationDocumentsDirectory()).path, _dbName);
-    _db = await openDatabase(path, version: _version, onCreate: _onCreate, onUpgrade: _onUpgrade);
+    _db = await openDatabase(
+      path,
+      version: _version,
+      onCreate: _onCreate,
+      onUpgrade: _onUpgrade,
+      onDowngrade: onDatabaseDowngradeDelete,
+    );
   }
 
   Future<void> _onCreate(Database db, int version) async {
-    await db.execute('CREATE TABLE archive_items (id TEXT PRIMARY KEY, data TEXT NOT NULL, normalized_url TEXT NOT NULL)');
-    await db.execute('CREATE INDEX idx_archive_items_normalized_url ON archive_items(normalized_url)');
-    await db.execute('CREATE TABLE categories (id TEXT PRIMARY KEY, data TEXT NOT NULL)');
+    await db.execute('CREATE TABLE IF NOT EXISTS archive_items (id TEXT PRIMARY KEY, data TEXT NOT NULL, normalized_url TEXT NOT NULL)');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_archive_items_normalized_url ON archive_items(normalized_url)');
+    await db.execute('CREATE TABLE IF NOT EXISTS categories (id TEXT PRIMARY KEY, data TEXT NOT NULL)');
   }
 
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
-    if (oldVersion >= 3) return;
-    await _onCreate(db, _version);
-    await _migrateLegacy(db);
+    // sqflite executes onUpgrade inside the database transaction. Do not drop,
+    // rename, or recreate existing user-data tables during an upgrade.
+    if (oldVersion < 3) {
+      await _createCurrentSchema(db);
+      await _migrateLegacy(db);
+    }
+
+    if (oldVersion < 4) {
+      // v4 is a storage-contract release. The v3 schema is already the
+      // canonical schema, so the migration is deliberately non-destructive.
+      await _createCurrentSchema(db);
+    }
+  }
+
+  Future<void> _createCurrentSchema(Database db) async {
+    await db.execute('CREATE TABLE IF NOT EXISTS archive_items (id TEXT PRIMARY KEY, data TEXT NOT NULL, normalized_url TEXT NOT NULL)');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_archive_items_normalized_url ON archive_items(normalized_url)');
+    await db.execute('CREATE TABLE IF NOT EXISTS categories (id TEXT PRIMARY KEY, data TEXT NOT NULL)');
   }
 
   Future<void> _migrateLegacy(Database db) async {
