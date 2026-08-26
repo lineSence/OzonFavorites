@@ -111,9 +111,9 @@ class LocalArchiveRepository implements ArchiveRepository {
   Future<List<ArchiveItem>> getItems({String? categoryId}) async {
     final rows = await _database.query(
       'archive_items',
-      where: categoryId == null ? "json_extract(data, '$.categoryId') IS NULL" : "json_extract(data, '$.categoryId') = ?",
+      where: categoryId == null ? 'json_extract(data, \'$.categoryId\') IS NULL' : 'json_extract(data, \'$.categoryId\') = ?',
       whereArgs: categoryId == null ? null : [categoryId],
-      orderBy: "json_extract(data, '$.createdAt') DESC",
+      orderBy: 'json_extract(data, \'$.createdAt\') DESC',
     );
     return rows.map((row) => ArchiveItem.fromJson(jsonDecode(row['data']! as String) as Map<String, dynamic>)).toList();
   }
