@@ -6,6 +6,7 @@ import android.graphics.Canvas
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.view.View
 import android.webkit.CookieManager
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -147,7 +148,14 @@ class MainActivity : FlutterActivity() {
         webView.settings.cacheMode = WebSettings.LOAD_DEFAULT
         webView.settings.userAgentString = "Mozilla/5.0 (Linux; Android 14; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
         webView.setBackgroundColor(android.graphics.Color.WHITE)
-        webView.alpha = 0f
+        // Keep the WebView fully renderable for View.draw(), but move it outside
+        // the visible Flutter content so the live page can never flash on screen.
+        // We intentionally do not use alpha=0 because that can produce blank
+        // screenshots on some Android GPU implementations.
+        webView.alpha = 1f
+        webView.translationX = -10000f
+        webView.translationY = -10000f
+        webView.setLayerType(View.LAYER_TYPE_SOFTWARE, null)
         webView.layoutParams = FrameLayout.LayoutParams(900, 1600)
         webView.isVerticalScrollBarEnabled = false
         webView.isHorizontalScrollBarEnabled = false
@@ -346,9 +354,9 @@ class MainActivity : FlutterActivity() {
         } catch (error: Exception) {
             logBrowserEvent("JS_EVALUATE_EXCEPTION", mapOf("attempt" to browserAttempt, "error" to error.toString()))
             val payload = mapOf<String, Any?>(
-                "originalUrl" to activeBrowserRequest?.url,
-                "finalUrl" to browserFinalUrl ?: webView.url,
-                "pageTitle" to browserPageTitle ?: webView.title,
+                "originalUrl" to activeBrowserRequest?.url?.toString(),
+                "finalUrl" to (browserFinalUrl ?: webView.url),
+                "pageTitle" to (browserPageTitle ?: webView.title),
                 "screenshotUri" to browserScreenshotUri,
             )
             finishBrowserResolve(payload, if (browserScreenshotUri != null) "screenshot_only" else "js_exception")
@@ -378,10 +386,30 @@ class MainActivity : FlutterActivity() {
                 logBrowserEvent("SCREENSHOT_FAIL", mapOf("reason" to "invalid_view_size", "width" to webView.width, "height" to webView.height))
                 return null
             }
+            // Make sure the view has a real layout before drawing it to an
+            // off-screen bitmap. This avoids a blank bitmap on devices where
+            // WebView has not completed its first layout pass yet.
+            webView.measure(
+                View.MeasureSpec.makeMeasureSpec(webView.width, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(webView.height, View.MeasureSpec.EXACTLY),
+            )
+            webView.layout(0, 0, webView.width, webView.height)
             webView.scrollTo(0, 0)
+
+            val wasAlpha = webView.alpha
+            if (wasAlpha < 1f) webView.alpha = 1f
+            webView.setLayerType(View.LAYER_TYPE_SOFTWARE, null)
+            webView.invalidate()
+            webView.buildDrawingCache(false)
+
             val bitmap = Bitmap.createBitmap(webView.width, webView.height, Bitmap.Config.ARGB_8888)
             val canvas = Canvas(bitmap)
+            canvas.drawColor(android.graphics.Color.WHITE)
             webView.draw(canvas)
+
+            webView.destroyDrawingCache()
+            webView.alpha = wasAlpha
+
             val file = File(cacheDir, "pinzon_screenshot_${System.currentTimeMillis()}.jpg")
             FileOutputStream(file).use { out ->
                 if (!bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)) {

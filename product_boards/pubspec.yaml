@@ -1,7 +1,7 @@
-name: product_boards
-description: Offline-first Pinterest-like product bookmark manager with Android Share support.
+name: pinzon
+description: Visual archive of links for fast saving and later organization.
 publish_to: 'none'
-version: 1.0.0+1
+version: 0.1.0+1
 
 environment:
   sdk: '>=3.10.0 <4.0.0'
@@ -14,6 +14,7 @@ dependencies:
   flutter_staggered_grid_view: ^0.7.0
   html: ^0.15.6
   http: ^1.6.0
+  image: ^4.5.4
   path: ^1.9.1
   path_provider: ^2.1.6
   shared_preferences: ^2.5.5
